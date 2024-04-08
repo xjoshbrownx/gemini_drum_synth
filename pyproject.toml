@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "gemini-drum-synth"
+version = "0.1.0"
+description = ""
+authors = ["xjoshbrownx <xjoshbrownx@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+
+[tool.poetry.group.dev.dependencies]
+pre-commit = "^3.7.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU Public License",
+    "Operating System :: OS Independent",
+]
+
+
+[project.urls]
+Homepage = "https://github.com/xjoshbrownx/gemini_drum_synth"
+Issues = "https://github.com/xjoshbrownx/gemini_drum_synth/issues"
