@@ -22,6 +22,8 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
+[tool.black]
+skip-string-normalization = 1
 
 [project.urls]
 Homepage = "https://github.com/xjoshbrownx/gemini_drum_synth"
