@@ -313,11 +313,13 @@ class ClickLayer(Layer):
 
         else:
             raise ValueError(
-                f"Invalid click_type '{click_type}'. Choose from 'simple', 'white_noise', or 'impulse'."
+                f"Invalid click_type '{self.click_type}'. Choose from 'simple', 'white_noise', or 'impulse'."
             )
 
         if self.click_pitch:
-            self.pitch_change_semitones(self.layer_audio, self.click_pitch)
+            self.layer_audio = self.pitch_change_semitones(
+                self.layer_audio, self.click_pitch
+            )
 
 
 @dataclass
