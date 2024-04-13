@@ -1,5 +1,6 @@
-from dataclasses import dataclass
 import numpy as np
+
+from dataclasses import dataclass
 
 # import sounddevice as sd
 from scipy.io import wavfile
@@ -13,14 +14,12 @@ from pedalboard import (
     Chorus,
     Limiter,
     Bitcrush,
+    Pedalboard,
     PitchShift,
     Resample,
     Distortion,
     Clipping,
 )
-
-# from scipy.signal import sosfreqz
-
 
 # Sampling parameters
 @dataclass
@@ -57,6 +56,7 @@ class Layer:
     reverb_send: int = 0
     delay_send: int = 0
     filepath: Path = Path.home() / "drumsynth/samples"
+    layer_audio: np.array = np.zeros(1)
 
     def pitch_change_semitones(self, audio_signal, semitones):
         """
@@ -88,6 +88,56 @@ class Layer:
     #     sd.play(audio, samplerate=sample_rate)
     #     sd.wait()
 
+    def gen_log_decay(self):
+        """Generate a logarithmic decay envelope."""
+        t = np.linspace(0, 1, self.duration)
+        envelope = np.exp(-5 * (1 - t) / self.attack) * np.exp(-5 * t / self.decay)
+        self.envelope
+
+    def gen_linear_decay(self):
+        """Generate a linear decay envelope."""
+        t = np.linspace(0, 1, self.duration)
+        envelope = 1 - t * (1 - np.exp(-5 / self.decay))
+        envelope[t < self.attack] *= t[t < self.attack] / self.attack
+        return envelope
+
+    def gen_double_peak(self):
+        """Generate a double peak envelope."""
+        t = np.linspace(0, 1, self.duration)
+        envelope = np.exp(-5 * (t - 0.5) ** 2 / (0.1 * self.attack**2))
+        envelope *= np.exp(-5 * t / self.decay)
+        return envelope
+
+    def modulate_amplitude(self):
+        """Generate an amplitude-modulated signal (AM) using a modulation envelope."""
+        t = np.linspace(
+            0, self.duration, int(self.sample_rate * self.duration), endpoint=False
+        )
+
+        # Carrier signal (sine wave)
+        carrier_signal = np.sin(2 * np.pi * self.source * t)
+
+        # Apply amplitude modulation (AM) with the modulation envelope
+        am_signal = carrier_signal * self.modulation_env
+
+        return am_signal
+
+    def apply_envelope(self):
+        # Apply a simple exponential decay envelope
+        # attack_samples = int(sample_rate * attack_time)
+        # attack_ramp = np.linspace(0, 1, attack_samples)
+        # wave[:attack_samples] *= attack_ramp
+        # decay = np.exp(-t / decay_time)
+        # wave *= decay
+
+        # Generate amplitude-modulated (AM) signal using the selected modulation envelope
+        am_signal = self.modulate_amplitude(self.spectra, self.env_type)
+
+        # Normalize the AM signal to the range [-1, 1]
+        am_signal /= np.max(np.abs(am_signal))
+
+        return am_signal
+
     def save_layer(self, filename):
         """
         Save the audio signal to a WAV file.
@@ -106,7 +156,9 @@ class Layer:
 @dataclass
 class SynthLayer(Layer):
     def gen_sine_wave(self, pitch_override=0):
-        """Generate Sine Wave"""
+        """
+        Generate Sine Wave
+        """
         if not pitch_override:
             pitch_override = self.frequency
         t = np.linspace(0, self.duration, self.num_samples, endpoint=False)
@@ -253,16 +305,21 @@ class SynthLayer(Layer):
 
 @dataclass
 class ClickLayer(Layer):
-    """Creates transient sounds alliveiating the need for frequency modulation to achieve this affect"""
+    """
+    TODO: add level, sends, etc.
+    Creates transient sounds alliveiating the need for frequency modulation to achieve this affect
+    """
 
     click_type: str = 'N1'
-    click_pitch: int = 0  # postive or negative pitch adjustment of the click sound each int is a half step
+    click_pitch: int = (
+        0  # adjust pitch of  click sound in semitones (postive or negative)
+    )
     click_duration: float = 0.01
 
     def __post_init__(self):
-        self.generate_click()
+        self.gen_click()
 
-    def generate_click(self):
+    def gen_click(self):
         """
         Generate a click sound waveform of the specified type.
 
@@ -326,12 +383,58 @@ class ClickLayer(Layer):
 class NoiseLayer(SynthLayer):
     """Noise layer"""
 
+    # noise_type: str = 'white'
     filter_type: str = 'L2'  # low pass 4 pole
     resonance: int = 0  # max 20
-    freq: int = 0  # filter frequency 0-50
+    freq: int = 0  # cutoff frequency in Hz
     dynamic_filter: int = 0  # plus or minus 9
     decay: int = 0  # max 50
     decay_type: str = "dyn"
+
+    def __post_init__(self):
+        filter_translate = {
+            'L1': 'LPF12',
+            'L2': 'LPF24',
+            'H1': 'HPF12',
+            'H2': 'HPF24',
+            'B1': 'BPF12',
+            'B2': 'BPF24',
+        }
+        self.filter_mode = filter_translate.get(self.filter_type)
+
+    def gen_noise(self):
+        """
+        Generate a noise sound waveform of the specified type.
+
+        Parameters:
+
+        Returns:
+            ndarray: NumPy array containing the generated click sound waveform.
+        """
+        self.layer_audio = self.gen_white_noise()
+        board = Pedalboard([LadderFilter()])[0]
+        board.mode = self.filter_mode
+        board.cutoff_hz = self.freq
+        board.drive = 0
+        board.resonance = self.resonance
+        self.layer_audio = board.process(self.layer_audio)
+
+        # step_size = 1000
+        # for i in range(0, af.frames, step_size_in_samples):
+        #     chunk = af.read(step_size_in_samples)
+
+        #     # Set the reverb's "wet" parameter to be equal to the
+        #     # percentage through the track (i.e.: make a ramp from 0% to 100%)
+        #     percentage_through_track = i / af.frames
+        #     board[0].cutoff_hz= = percentage_through_track
+
+        #         # Update our progress bar with the number of samples received:
+        #         pbar.update(chunk.shape[1])
+
+        #         # Process this chunk of audio, setting `reset` to `False`
+        #         # to ensure that reverb tails aren't cut off
+        #         output = board.process(chunk, af.samplerate, reset=False)
+        #         o.write(output)
 
 
 @dataclass
