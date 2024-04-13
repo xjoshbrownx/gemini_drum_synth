@@ -3,7 +3,7 @@ import numpy as np
 
 # import sounddevice as sd
 from scipy.io import wavfile
-from scipy.signal import butter, lfilter, iirpeak, sosfilt
+from scipy.signal import butter, lfilter, iirpeak, sosfilt, resample as sci_resample
 from pathlib import Path
 from pedalboard import (
     Compressor,
@@ -24,12 +24,32 @@ from pedalboard import (
 
 # Sampling parameters
 @dataclass
-class Layer:
+class Sound:
     sample_rate: int = 44100  # Sample rate (Hz)
     output_file_bitdepth: int = 16
     velocity: int = 90  # intensity of drum hit
-    level: float = 0.5
     pan: int = 0
+    level: float = 0.5
+
+    def save_audio(self, filename):
+        """
+        Save the audio signal to a WAV file.
+
+        Parameters:
+        - audio: numpy array containing the audio signal
+        - filename: name of the output WAV file
+        """
+        # Scale audio to 16-bit integer range (-32768 to 32767)
+        audio_int = (self.audio * 32767).astype(np.int16)
+
+        # Save the audio to a WAV file
+        wavfile.write(self.filepath / f"{filename}.wav", self.sample_rate, audio_int)
+
+
+@dataclass
+class Layer:
+    sample_rate: int = 44100
+    level: float = 0.5
     wave_guide_send: int = 0
     distortion_send: int = 0
     fx_bus_1_send: int = 0
@@ -37,6 +57,86 @@ class Layer:
     reverb_send: int = 0
     delay_send: int = 0
     filepath: Path = Path.home() / "drumsynth/samples"
+
+    def pitch_change_semitones(self, audio_signal, semitones):
+        """
+        Change the pitch of an audio signal by a specified number of semitones.
+
+        Parameters:
+            audio_signal (ndarray): Input audio signal as a NumPy array.
+            original_sr (int): Original sampling rate of the audio signal.
+            semitones (float): Number of semitones to shift the pitch.
+                Positive value for pitch increase (upwards), negative value for pitch decrease (downwards).
+
+        Returns:
+            ndarray: Audio signal with adjusted pitch (resampled to the target frequency).
+        """
+        # Calculate the frequency ratio based on the number of semitones
+        frequency_ratio = 2 ** (semitones / 12)
+
+        # Determine the target sample rate based on the frequency ratio
+        target_sr = int(self.sample_rate * frequency_ratio)
+
+        # Resample the audio signal to the target sample rate
+        num_samples = int(len(audio_signal) * float(target_sr) / self.sample_rate)
+        resampled_signal = sci_resample(audio_signal, num_samples)
+
+        return resampled_signal
+
+    # def play_audio(audio):
+    #     """Play the audio signal using sounddevice."""
+    #     sd.play(audio, samplerate=sample_rate)
+    #     sd.wait()
+
+    def save_layer(self, filename):
+        """
+        Save the audio signal to a WAV file.
+
+        Parameters:
+        - audio: numpy array containing the audio signal
+        - filename: name of the output WAV file
+        """
+        # Scale audio to 16-bit integer range (-32768 to 32767)
+        audio_int = (self.layer_audio * 32767).astype(np.int16)
+
+        # Save the audio to a WAV file
+        wavfile.write(self.filepath / f"{filename}.wav", self.sample_rate, audio_int)
+
+
+@dataclass
+class SynthLayer(Layer):
+    def gen_sine_wave(self, pitch_override=0):
+        """Generate Sine Wave"""
+        if not pitch_override:
+            pitch_override = self.frequency
+        t = np.linspace(0, self.duration, self.num_samples, endpoint=False)
+        sine_wave = np.sin(2 * np.pi * pitch_override * t)
+        sine_wave /= np.max(np.abs(sine_wave))
+        return sine_wave
+
+    def gen_tri_wave(self, pitch_override=0):
+        """
+        Generate a triangle wave audio signal.
+
+        Parameters:
+            pitch_override (int): allow function to work with frequences that are not stored in the self.frequency property.
+
+        Returns:
+            ndarray: Generated triangle wave audio signal.
+        """
+        if not pitch_override:
+            pitch_override = self.frequency
+        t = np.linspace(
+            0, self.duration, self.num_samples, endpoint=False
+        )  # Time array
+
+        # Calculate angular frequency in radians
+        angular_freq = 2 * np.pi * pitch_override
+
+        # Generate triangle wave using modulo operation
+        triangle_wave = 2 * np.abs((t * angular_freq / (2 * np.pi) % 1) - 0.5) - 1
+
+        return triangle_wave
 
     def gen_saw_wave(self, pitch_override=0):
         """Generate Saw Wave"""
@@ -67,39 +167,6 @@ class Layer:
         t = np.linspace(0, self.duration, self.num_samples, endpoint=False)
         square_wave = np.sign(np.sin(2 * np.pi * pitch_override * t))
         return square_wave
-
-    def gen_tri_wave(self, pitch_override=0):
-        """
-        Generate a triangle wave audio signal.
-
-        Parameters:
-            pitch_override (int): allow function to work with frequences that are not stored in the self.frequency property.
-
-        Returns:
-            ndarray: Generated triangle wave audio signal.
-        """
-        if not pitch_override:
-            pitch_override = self.frequency
-        t = np.linspace(
-            0, self.duration, self.num_samples, endpoint=False
-        )  # Time array
-
-        # Calculate angular frequency in radians
-        angular_freq = 2 * np.pi * pitch_override
-
-        # Generate triangle wave using modulo operation
-        triangle_wave = 2 * np.abs((t * angular_freq / (2 * np.pi) % 1) - 0.5) - 1
-
-        return triangle_wave
-
-    def gen_sine_wave(self, pitch_override=0):
-        """Generate Sine Wave"""
-        if not pitch_override:
-            pitch_override = self.frequency
-        t = np.linspace(0, self.duration, self.num_samples, endpoint=False)
-        sine_wave = np.sin(2 * np.pi * pitch_override * t)
-        sine_wave /= np.max(np.abs(sine_wave))
-        return sine_wave
 
     def gen_white_noise(self):
         """
@@ -183,219 +250,94 @@ class Layer:
 
         return blue_noise
 
-    # def play_audio(audio):
-    #     """Play the audio signal using sounddevice."""
-    #     sd.play(audio, samplerate=sample_rate)
-    #     sd.wait()
-
-    def save_audio(self, filename):
-        """
-        Save the audio signal to a WAV file.
-
-        Parameters:
-        - audio: numpy array containing the audio signal
-        - filename: name of the output WAV file
-        """
-        # Scale audio to 16-bit integer range (-32768 to 32767)
-        audio_int = (self.audio * 32767).astype(np.int16)
-
-        # Save the audio to a WAV file
-        wavfile.write(self.filepath / f"{filename}.wav", self.sample_rate, audio_int)
-
 
 @dataclass
-class GeminiDrumLayer(Layer):
-    """
-    Generate a drum sound using basic synthesis.
+class ClickLayer(Layer):
+    """Creates transient sounds alliveiating the need for frequency modulation to achieve this affect"""
 
-    Parameters:
-    - sample_rate: sample rate in number of individual samples
-    - output_file_bitdepth: bit depth of file to be generated
-    - src_type: type of audio signal to be generated as a basis for the drum layer sound
-    - mod_type: type of modulation being applied to signal if not specified in src_type
-    - env_type: type of envelope to apply to signal: linear, exponential 1, exponential 2, exponential 3, punchy, double peak
-    - level: audio level 0-1 of output signal
-    - frequency: Fundamental frequency of the oscillator or in the case of noise the cutoff filter applied to noise (Hz)
-    - detune: offers a detuning function that adds an oscillator of a fix difference frequency specified by this value
-    - attack: time in seconds for signal to rise to peak
-    - decay: time in seconds for signal to drop to persistent zero after peak
-    - mod_amount: amount or amplitude of modulation to effect oscillation signal
-    - mod_rate: frequency of modulated signal
-
-    """
-
-    src_type: str = "square"
-    mod_type: str = "exp"
-    env_type: str = "linear"
-    frequency: int = 440
-    detune: int = 10
-    attack: float = 0.01  # Duration of the synthesized sound (seconds)
-    decay: float = 2.0
-    mod_amount: float = 1.0
-    mod_rate: int = 220
-    dynamic_filter: float = 0
+    click_type: str = 'N1'
+    click_pitch: int = 0  # postive or negative pitch adjustment of the click sound each int is a half step
+    click_duration: float = 0.01
 
     def __post_init__(self):
-        self.duration = self.attack + self.decay
-        self.num_samples = int(self.duration * self.sample_rate)
-        self.noise_types = {
-            "white": self.gen_white_noise,
-            "brown": self.gen_brown_noise,
-            "pink": self.gen_pink_noise,
-            "blue": self.gen_blue_noise,
-        }
-        self.filter_types = {
-            "low": self.apply_low_pass_filter,
-            "high": self.apply_high_pass_filter,
-            "band": self.apply_band_pass_filter,
-        }
-        self.osc_func = {
-            "sine": self.gen_sine_wave,
-            "saw": self.gen_saw_wave,
-            "rev_saw": self.gen_rev_saw_wave,
-            "square": self.gen_square_wave,
-            "tri": self.gen_tri_wave,
-            "white_noise": self.gen_white_noise,
-            "hp_white_noise": self.gen_highpass_white_noise,
-            "lp_white_noise": self.gen_lowpass_white_noise,
-            "bp_white_noise": self.gen_bandpass_white_noise,
-            "blue_noise": self.gen_blue_noise,
-            "hp_blue_noise": self.gen_highpass_blue_noise,
-            "lp_blue_noise": self.gen_lowpass_blue_noise,
-            "bp_blue_noise": self.gen_bandpass_blue_noise,
-            "brown_noise": self.gen_brown_noise,
-            "hp_brown_noise": self.gen_highpass_brown_noise,
-            "lp_brown_noise": self.gen_lowpass_brown_noise,
-            "bp_brown_noise": self.gen_bandpass_brown_noise,
-            "pink_noise": self.gen_pink_noise,
-            "hp_pink_noise": self.gen_highpass_pink_noise,
-            "lp_pink_noise": self.gen_lowpass_pink_noise,
-            "bp_pink_noise": self.gen_bandpass_pink_noise,
-        }
-        self.env_type = {
-            "log": self.gen_log_decay,
-            "linear": self.gen_linear_decay,
-            "double_peak": self.gen_double_peak,
-        }
-        self.apply_wave()
-        # if self.b is None:
-        #     self.b = 'Bravo'
-        # if self.c is None:
-        #     self.c = 'Charlie'
+        self.generate_click()
 
-    def apply_wave(self):
-        """Run code to generate source audio that will be used as basis for drum sounds"""
-        self.audio = self.osc_func[self.src_type]()
+    def generate_click(self):
+        """
+        Generate a click sound waveform of the specified type.
 
-    def gen_filtered_noise(self, noise_type, filter_type, cutoff):
-        noise = self.noise_types.get(noise_type, "white")()
-        return self.allpass_filter(signal=noise)
-        # return self.filter_types.get(filter_type)(
-        #     signal=self.noise_types.get(noise_type)(), cutoff_frequency=cutoff
-        # )
+        Parameters:
+            click_type (str): Type of click sound ('simple', 'white_noise', 'impulse').
+            duration (float): Duration of the click sound in seconds (default: 0.01 seconds).
+            sample_rate (int): Sampling rate of the audio waveform (samples per second, default: 44100).
 
-    def gen_highpass_white_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="white", filter_type="high", cutoff=self.frequency
-        )
+        Returns:
+            ndarray: NumPy array containing the generated click sound waveform.
+        """
+        num_samples = int(self.click_duration * self.sample_rate)
+        t = np.linspace(0, self.click_duration, num_samples, endpoint=False)
+        click_envelope = np.exp(-5 * t)  # Exponential decay envelope
+        print(num_samples)
 
-    def gen_highpass_blue_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="blue", filter_type="high", cutoff=self.frequency
-        )
+        if self.click_type == 'S1':
+            # Generate a simple click (cosine wave envelope)
+            self.layer_audio = np.cos(2 * np.pi * 1000 * t) * click_envelope
 
-    def gen_highpass_pink_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="pink", filter_type="high", cutoff=self.frequency
-        )
+        elif self.click_type == 'N1':
+            # Generate a burst of white noise
+            self.layer_audio = np.random.randn(num_samples)
 
-    def gen_highpass_brown_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="brown", filter_type="high", cutoff=self.frequency
-        )
+        elif self.click_type == 'N2':
+            # Generate a burst of white noise with short envelop
+            self.layer_audio = np.random.randn(num_samples) * click_envelope
 
-    def gen_lowpass_white_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="white", filter_type="low", cutoff=self.frequency
-        )
+        elif self.click_type == 'I1':
+            # Generate an impulse (single-sample spike)
+            self.layer_audio = np.zeros(num_samples)
+            self.layer_audio[0] = 1.0
 
-    def gen_lowpass_blue_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="blue", filter_type="low", cutoff=self.frequency
-        )
+        elif self.click_type == 'M1':
+            # Generate an metallic click (High-frequency sinusoidal component)
+            high_freq_component = np.sin(2 * np.pi * 3000 * t)
+            # Combine envelope with high-frequency component
+            self.layer_audio = click_envelope * high_freq_component
 
-    def gen_lowpass_pink_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="pink", filter_type="low", cutoff=self.frequency
-        )
+        elif self.click_type == 'T1':
+            # Envelope shaping for thud click
+            low_freq_component = np.sin(
+                2 * np.pi * 200 * t
+            )  # Low-frequency sinusoidal component
 
-    def gen_lowpass_brown_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="brown", filter_type="low", cutoff=self.frequency
-        )
+            # Combine envelope with low-frequency component
+            self.layer_audio = click_envelope * low_freq_component
 
-    def gen_bandpass_white_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="white", filter_type="band", cutoff=self.frequency
-        )
+        else:
+            raise ValueError(
+                f"Invalid click_type '{click_type}'. Choose from 'simple', 'white_noise', or 'impulse'."
+            )
 
-    def gen_bandpass_blue_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="blue", filter_type="band", cutoff=self.frequency
-        )
-
-    def gen_bandpass_pink_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="pink", filter_type="band", cutoff=self.frequency
-        )
-
-    def gen_bandpass_brown_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="brown", filter_type="band", cutoff=self.frequency
-        )
-
-    def apply_low_pass_filter(self, signal, cutoff_frequency):
-        """Apply a low-pass Butterworth filter to the signal."""
-        nyquist_freq = 0.5 * self.sample_rate
-        normal_cutoff = cutoff_frequency / nyquist_freq
-        # b, a = butter(4, normal_cutoff, btype='low', analog=False)
-        b, a = butter(4, normal_cutoff, btype="low", analog=True)
-        filtered_signal = lfilter(b, a, signal)
-        filtered_signal /= np.max(np.abs(filtered_signal))
-        return filtered_signal
-
-    def allpass_filter(self, signal, cutoff=440, filter_type="low"):
-        cut_off_freq_mod = np.geomspace(20000, 20, signal.shape[0])
-
-        allpass_signal = np.zeros_like(signal)
-
-        dn_1 = 0
-
-        for n in range(signal.shape[0]):
-            break_frequency = cut_off_freq_mod[n]
-
-            tan = np.tan(np.pi * break_frequency / self.sample_rate)
-
-            a1 = (tan - 1) / (tan + 1)
-
-            allpass_signal[n] = a1 + signal[n] + dn_1
-
-            dn_1 = signal[n] - a1 * allpass_signal[n]
-
-        if filter_type == "high":
-            allpass_signal *= -1
-
-        filtered_signal = (signal + allpass_signal) * 0.5
-
-        return filtered_signal
+        if self.click_pitch:
+            self.pitch_change_semitones(self.layer_audio, self.click_pitch)
 
 
 @dataclass
-class DeluxeLayer(Layer):
+class NoiseLayer(SynthLayer):
+    """Noise layer"""
+
+    filter_type: str = 'L2'  # low pass 4 pole
+    resonance: int = 0  # max 20
+    freq: int = 0  # filter frequency 0-50
+    dynamic_filter: int = 0  # plus or minus 9
+    decay: int = 0  # max 50
+    decay_type: str = "dyn"
+
+
+@dataclass
+class ToneLayer(SynthLayer):
 
     wave: str = "A1"  # default sine wave
     second: int = 50  # second parameter, spectra if applicable
-    third: int = 0  # third parameter of the spectra
+    third: int = 0  # third parameter of the wave also filter frequency
     dynamic_filter: int = 0
     decay: int = 20
     decay_type: str = "dyn"
@@ -624,6 +566,193 @@ class DeluxeLayer(Layer):
     # fm_signal = np.sin(2 * np.pi * (carrier_freq + mod_amount * modulation_waveform) * t)
 
     # return fm_signal
+
+
+@dataclass
+class GenericLayer(SynthLayer):
+    """
+    Generate a drum sound using basic synthesis.
+
+    Parameters:
+    - sample_rate: sample rate in number of individual samples
+    - output_file_bitdepth: bit depth of file to be generated
+    - src_type: type of audio signal to be generated as a basis for the drum layer sound
+    - mod_type: type of modulation being applied to signal if not specified in src_type
+    - env_type: type of envelope to apply to signal: linear, exponential 1, exponential 2, exponential 3, punchy, double peak
+    - level: audio level 0-1 of output signal
+    - frequency: Fundamental frequency of the oscillator or in the case of noise the cutoff filter applied to noise (Hz)
+    - detune: offers a detuning function that adds an oscillator of a fix difference frequency specified by this value
+    - attack: time in seconds for signal to rise to peak
+    - decay: time in seconds for signal to drop to persistent zero after peak
+    - mod_amount: amount or amplitude of modulation to effect oscillation signal
+    - mod_rate: frequency of modulated signal
+
+    """
+
+    src_type: str = "square"
+    mod_type: str = "exp"
+    env_type: str = "linear"
+    frequency: int = 440
+    detune: int = 10
+    attack: float = 0.01  # Duration of the synthesized sound (seconds)
+    decay: float = 2.0
+    mod_amount: float = 1.0
+    mod_rate: int = 220
+    dynamic_filter: float = 0
+
+    def __post_init__(self):
+        self.duration = self.attack + self.decay
+        self.num_samples = int(self.duration * self.sample_rate)
+        self.noise_types = {
+            "white": self.gen_white_noise,
+            "brown": self.gen_brown_noise,
+            "pink": self.gen_pink_noise,
+            "blue": self.gen_blue_noise,
+        }
+        self.filter_types = {
+            "low": self.apply_low_pass_filter,
+            "high": self.apply_high_pass_filter,
+            "band": self.apply_band_pass_filter,
+        }
+        self.osc_func = {
+            "sine": self.gen_sine_wave,
+            "saw": self.gen_saw_wave,
+            "rev_saw": self.gen_rev_saw_wave,
+            "square": self.gen_square_wave,
+            "tri": self.gen_tri_wave,
+            "white_noise": self.gen_white_noise,
+            "hp_white_noise": self.gen_highpass_white_noise,
+            "lp_white_noise": self.gen_lowpass_white_noise,
+            "bp_white_noise": self.gen_bandpass_white_noise,
+            "blue_noise": self.gen_blue_noise,
+            "hp_blue_noise": self.gen_highpass_blue_noise,
+            "lp_blue_noise": self.gen_lowpass_blue_noise,
+            "bp_blue_noise": self.gen_bandpass_blue_noise,
+            "brown_noise": self.gen_brown_noise,
+            "hp_brown_noise": self.gen_highpass_brown_noise,
+            "lp_brown_noise": self.gen_lowpass_brown_noise,
+            "bp_brown_noise": self.gen_bandpass_brown_noise,
+            "pink_noise": self.gen_pink_noise,
+            "hp_pink_noise": self.gen_highpass_pink_noise,
+            "lp_pink_noise": self.gen_lowpass_pink_noise,
+            "bp_pink_noise": self.gen_bandpass_pink_noise,
+        }
+        self.env_type = {
+            "log": self.gen_log_decay,
+            "linear": self.gen_linear_decay,
+            "double_peak": self.gen_double_peak,
+        }
+        self.apply_wave()
+        # if self.b is None:
+        #     self.b = 'Bravo'
+        # if self.c is None:
+        #     self.c = 'Charlie'
+
+    def apply_wave(self):
+        """Run code to generate source audio that will be used as basis for drum sounds"""
+        self.layer_audio = self.osc_func[self.src_type]()
+
+    def gen_filtered_noise(self, noise_type, filter_type, cutoff):
+        noise = self.noise_types.get(noise_type, "white")()
+        return self.allpass_filter(signal=noise)
+        # return self.filter_types.get(filter_type)(
+        #     signal=self.noise_types.get(noise_type)(), cutoff_frequency=cutoff
+        # )
+
+    def gen_highpass_white_noise(self):
+        return self.gen_filtered_noise(
+            noise_type="white", filter_type="high", cutoff=self.frequency
+        )
+
+    def gen_highpass_blue_noise(self):
+        return self.gen_filtered_noise(
+            noise_type="blue", filter_type="high", cutoff=self.frequency
+        )
+
+    def gen_highpass_pink_noise(self):
+        return self.gen_filtered_noise(
+            noise_type="pink", filter_type="high", cutoff=self.frequency
+        )
+
+    def gen_highpass_brown_noise(self):
+        return self.gen_filtered_noise(
+            noise_type="brown", filter_type="high", cutoff=self.frequency
+        )
+
+    def gen_lowpass_white_noise(self):
+        return self.gen_filtered_noise(
+            noise_type="white", filter_type="low", cutoff=self.frequency
+        )
+
+    def gen_lowpass_blue_noise(self):
+        return self.gen_filtered_noise(
+            noise_type="blue", filter_type="low", cutoff=self.frequency
+        )
+
+    def gen_lowpass_pink_noise(self):
+        return self.gen_filtered_noise(
+            noise_type="pink", filter_type="low", cutoff=self.frequency
+        )
+
+    def gen_lowpass_brown_noise(self):
+        return self.gen_filtered_noise(
+            noise_type="brown", filter_type="low", cutoff=self.frequency
+        )
+
+    def gen_bandpass_white_noise(self):
+        return self.gen_filtered_noise(
+            noise_type="white", filter_type="band", cutoff=self.frequency
+        )
+
+    def gen_bandpass_blue_noise(self):
+        return self.gen_filtered_noise(
+            noise_type="blue", filter_type="band", cutoff=self.frequency
+        )
+
+    def gen_bandpass_pink_noise(self):
+        return self.gen_filtered_noise(
+            noise_type="pink", filter_type="band", cutoff=self.frequency
+        )
+
+    def gen_bandpass_brown_noise(self):
+        return self.gen_filtered_noise(
+            noise_type="brown", filter_type="band", cutoff=self.frequency
+        )
+
+    def apply_low_pass_filter(self, signal, cutoff_frequency):
+        """Apply a low-pass Butterworth filter to the signal."""
+        nyquist_freq = 0.5 * self.sample_rate
+        normal_cutoff = cutoff_frequency / nyquist_freq
+        # b, a = butter(4, normal_cutoff, btype='low', analog=False)
+        b, a = butter(4, normal_cutoff, btype="low", analog=True)
+        filtered_signal = lfilter(b, a, signal)
+        filtered_signal /= np.max(np.abs(filtered_signal))
+        return filtered_signal
+
+    def allpass_filter(self, signal, cutoff=440, filter_type="low"):
+        cut_off_freq_mod = np.geomspace(20000, 20, signal.shape[0])
+
+        allpass_signal = np.zeros_like(signal)
+
+        dn_1 = 0
+
+        for n in range(signal.shape[0]):
+            break_frequency = cut_off_freq_mod[n]
+
+            tan = np.tan(np.pi * break_frequency / self.sample_rate)
+
+            a1 = (tan - 1) / (tan + 1)
+
+            allpass_signal[n] = a1 + signal[n] + dn_1
+
+            dn_1 = signal[n] - a1 * allpass_signal[n]
+
+        if filter_type == "high":
+            allpass_signal *= -1
+
+        filtered_signal = (signal + allpass_signal) * 0.5
+
+        return filtered_signal
 
 
 # @dataclass
