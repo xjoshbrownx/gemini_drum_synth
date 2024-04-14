@@ -88,56 +88,6 @@ class Layer:
     #     sd.play(audio, samplerate=sample_rate)
     #     sd.wait()
 
-    def gen_log_decay(self):
-        """Generate a logarithmic decay envelope."""
-        t = np.linspace(0, 1, self.duration)
-        envelope = np.exp(-5 * (1 - t) / self.attack) * np.exp(-5 * t / self.decay)
-        self.envelope
-
-    def gen_linear_decay(self):
-        """Generate a linear decay envelope."""
-        t = np.linspace(0, 1, self.duration)
-        envelope = 1 - t * (1 - np.exp(-5 / self.decay))
-        envelope[t < self.attack] *= t[t < self.attack] / self.attack
-        return envelope
-
-    def gen_double_peak(self):
-        """Generate a double peak envelope."""
-        t = np.linspace(0, 1, self.duration)
-        envelope = np.exp(-5 * (t - 0.5) ** 2 / (0.1 * self.attack**2))
-        envelope *= np.exp(-5 * t / self.decay)
-        return envelope
-
-    def modulate_amplitude(self):
-        """Generate an amplitude-modulated signal (AM) using a modulation envelope."""
-        t = np.linspace(
-            0, self.duration, int(self.sample_rate * self.duration), endpoint=False
-        )
-
-        # Carrier signal (sine wave)
-        carrier_signal = np.sin(2 * np.pi * self.source * t)
-
-        # Apply amplitude modulation (AM) with the modulation envelope
-        am_signal = carrier_signal * self.modulation_env
-
-        return am_signal
-
-    def apply_envelope(self):
-        # Apply a simple exponential decay envelope
-        # attack_samples = int(sample_rate * attack_time)
-        # attack_ramp = np.linspace(0, 1, attack_samples)
-        # wave[:attack_samples] *= attack_ramp
-        # decay = np.exp(-t / decay_time)
-        # wave *= decay
-
-        # Generate amplitude-modulated (AM) signal using the selected modulation envelope
-        am_signal = self.modulate_amplitude(self.spectra, self.env_type)
-
-        # Normalize the AM signal to the range [-1, 1]
-        am_signal /= np.max(np.abs(am_signal))
-
-        return am_signal
-
     def save_layer(self, filename):
         """
         Save the audio signal to a WAV file.
@@ -155,6 +105,14 @@ class Layer:
 
 @dataclass
 class SynthLayer(Layer):
+    pitch: int = 0  # adjust pitch of  click sound in semitones (postive or negative)
+    duration: float = 0.01
+    attack: float = 0.01  # Duration of the synthesized sound (seconds)
+    decay: float = 2.0
+
+    def __post_init__(self):
+        self.num_samples = int(self.duration * self.sample_rate)
+
     def gen_sine_wave(self, pitch_override=0):
         """
         Generate Sine Wave
@@ -302,21 +260,75 @@ class SynthLayer(Layer):
 
         return blue_noise
 
+    def gen_log_decay(self):
+        """Generate a logarithmic decay envelope."""
+        t = np.linspace(0, 1, self.duration)
+        envelope = np.exp(-5 * (1 - t) / self.attack) * np.exp(-5 * t / self.decay)
+        self.envelope
+
+    def gen_linear_decay(self):
+        """Generate a linear decay envelope."""
+        t = np.linspace(0, 1, self.duration)
+        envelope = 1 - t * (1 - np.exp(-5 / self.decay))
+        envelope[t < self.attack] *= t[t < self.attack] / self.attack
+        return envelope
+
+    def gen_double_peak(self):
+        """Generate a double peak envelope."""
+        t = np.linspace(0, 1, self.duration)
+        envelope = np.exp(-5 * (t - 0.5) ** 2 / (0.1 * self.attack**2))
+        envelope *= np.exp(-5 * t / self.decay)
+        return envelope
+
+    def gen_gate_decay(self):
+        np.ones
+
+    def gen_punch_decay(self):
+        # TODO
+        return self.gen_log_decay()
+
+    def modulate_amplitude(self):
+        """Generate an amplitude-modulated signal (AM) using a modulation envelope."""
+        t = np.linspace(
+            0, self.duration, int(self.sample_rate * self.duration), endpoint=False
+        )
+
+        # Carrier signal (sine wave)
+        carrier_signal = np.sin(2 * np.pi * self.source * t)
+
+        # Apply amplitude modulation (AM) with the modulation envelope
+        am_signal = carrier_signal * self.modulation_env
+
+        return am_signal
+
+    def apply_envelope(self):
+        # Apply a simple exponential decay envelope
+        # attack_samples = int(sample_rate * attack_time)
+        # attack_ramp = np.linspace(0, 1, attack_samples)
+        # wave[:attack_samples] *= attack_ramp
+        # decay = np.exp(-t / decay_time)
+        # wave *= decay
+
+        # Generate amplitude-modulated (AM) signal using the selected modulation envelope
+        am_signal = self.modulate_amplitude(self.spectra, self.env_type)
+
+        # Normalize the AM signal to the range [-1, 1]
+        am_signal /= np.max(np.abs(am_signal))
+
+        return am_signal
+
 
 @dataclass
-class ClickLayer(Layer):
+class ClickLayer(SynthLayer):
     """
     TODO: add level, sends, etc.
     Creates transient sounds alliveiating the need for frequency modulation to achieve this affect
     """
 
     click_type: str = 'N1'
-    click_pitch: int = (
-        0  # adjust pitch of  click sound in semitones (postive or negative)
-    )
-    click_duration: float = 0.01
 
     def __post_init__(self):
+        self.attack = 0
         self.gen_click()
 
     def gen_click(self):
@@ -331,8 +343,8 @@ class ClickLayer(Layer):
         Returns:
             ndarray: NumPy array containing the generated click sound waveform.
         """
-        num_samples = int(self.click_duration * self.sample_rate)
-        t = np.linspace(0, self.click_duration, num_samples, endpoint=False)
+        num_samples = int(self.duration * self.sample_rate)
+        t = np.linspace(0, self.duration, num_samples, endpoint=False)
         click_envelope = np.exp(-5 * t)  # Exponential decay envelope
         print(num_samples)
 
@@ -373,10 +385,8 @@ class ClickLayer(Layer):
                 f"Invalid click_type '{self.click_type}'. Choose from 'simple', 'white_noise', or 'impulse'."
             )
 
-        if self.click_pitch:
-            self.layer_audio = self.pitch_change_semitones(
-                self.layer_audio, self.click_pitch
-            )
+        if self.pitch:
+            self.layer_audio = self.pitch_change_semitones(self.layer_audio, self.pitch)
 
 
 @dataclass
@@ -386,21 +396,31 @@ class NoiseLayer(SynthLayer):
     # noise_type: str = 'white'
     filter_type: str = 'L2'  # low pass 4 pole
     resonance: int = 0  # max 20
-    freq: int = 0  # cutoff frequency in Hz
+    freq: int = 200  # cutoff frequency in Hz
     dynamic_filter: int = 0  # plus or minus 9
-    decay: int = 0  # max 50
-    decay_type: str = "dyn"
+    # decay: int = 0  # max 50
+    decay_type: str = "E"  #
+    # drive: float = 1.0
 
     def __post_init__(self):
+        self.attack = 0
         filter_translate = {
-            'L1': 'LPF12',
-            'L2': 'LPF24',
-            'H1': 'HPF12',
-            'H2': 'HPF24',
-            'B1': 'BPF12',
-            'B2': 'BPF24',
+            'L1': LadderFilter.LPF12,
+            'L2': LadderFilter.LPF24,
+            'H1': LadderFilter.HPF12,
+            'H2': LadderFilter.HPF24,
+            'B1': LadderFilter.BPF12,
+            'B2': LadderFilter.BPF24,
         }
-        self.filter_mode = filter_translate.get(self.filter_type)
+        decay_translate = {
+            'E': self.gen_log_decay,
+            'L': self.gen_linear_decay,
+            'G': self.gen_gate_decay,
+            'P': self.gen_punch_decay,
+        }
+        self.filter_mode = filter_translate.get(self.filter_type, 'L2')
+        self.decay_model = decay_translate.get(self.decay_type, 'E')
+        self.gen_noise()
 
     def gen_noise(self):
         """
@@ -411,11 +431,12 @@ class NoiseLayer(SynthLayer):
         Returns:
             ndarray: NumPy array containing the generated click sound waveform.
         """
+        self.num_samples = 44100  # TEMP
         self.layer_audio = self.gen_white_noise()
         board = Pedalboard([LadderFilter()])[0]
         board.mode = self.filter_mode
         board.cutoff_hz = self.freq
-        board.drive = 0
+        board.drive = 1.0
         board.resonance = self.resonance
         self.layer_audio = board.process(self.layer_audio)
 
@@ -444,12 +465,15 @@ class ToneLayer(SynthLayer):
     second: int = 50  # second parameter, spectra if applicable
     third: int = 0  # third parameter of the wave also filter frequency
     dynamic_filter: int = 0
-    decay: int = 20
+    # decay: int = 20
     decay_type: str = "dyn"
     dynamic_decay: int = 0
     bend: int = 0
     bend_time: int = 0
     pitch: int = 60  # default middle c
+
+    def __post_init__(self):
+        self.attack = 0
 
     def choose_spectra(self):
         self.spectra_options = {
@@ -460,15 +484,6 @@ class ToneLayer(SynthLayer):
             "A5": self.hp_square_wave,  # high pass filtered square wave
             # 'A6':self.gen_pulse_wave, #analog-style pulse wave
         }
-
-    def gen_sine_wave(self, pitch_override=0):
-        """Generate Sine Wave"""
-        if not pitch_override:
-            pitch_override = self.frequency
-        t = np.linspace(0, self.duration, self.num_samples, endpoint=False)
-        sine_wave = np.sin(2 * np.pi * pitch_override * t)
-        sine_wave /= np.max(np.abs(sine_wave))
-        return sine_wave
 
     def gen_simulated_drum_head_sound(Lx, Ly, Nx, Ny, T, dt, c, damping_coeff):
         """
@@ -555,122 +570,33 @@ class ToneLayer(SynthLayer):
         #         Lx, Ly, Nx, Ny, T, dt, c, damping_coeff
         #     )
 
-    def apply_high_pass_filter(self, signal, cutoff_frequency):
-        """Apply a high-pass Butterworth filter to the signal."""
-        nyquist_freq = 0.5 * self.sample_rate
-        normal_cutoff = cutoff_frequency / nyquist_freq
-        b, a = butter(4, normal_cutoff, btype="high", analog=True)
-        filtered_signal = lfilter(b=b, a=a, x=signal)
-        filtered_signal /= np.max(np.abs(filtered_signal))
-        return filtered_signal
+    def frequency_modulation(carrier_freq, modulation_type, mod_freq, mod_amount):
+        """Generate a frequency-modulated signal (FM)."""
+        t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
 
-    def apply_band_pass_filter(self, signal, cutoff_frequency, width=100):
-        """Apply a dynamic bandpass filter with variable cutoff frequency and resonance (Q-factor)."""
-        # Calculate lower and upper cutoff frequencies for the bandpass filter
-        nyquist_freq = 0.5 * self.sample_rate
-        lower_cutoff = (cutoff_frequency - (width)) / nyquist_freq
-        upper_cutoff = (cutoff_frequency + (width)) / nyquist_freq
-        # Design a bandpass Butterworth filter with specified cutoff frequencies and order
-        order = 4  # Filter order
-        b_bandpass, a_bandpass = butter(
-            order,
-            [lower_cutoff, upper_cutoff],
-            btype="bandpass",
-            fs=self.sample_rate,
-            output="ba",
-        )
-
-        # Apply the bandpass filter to the audio signal
-        filtered_signal = lfilter(b_bandpass, a_bandpass, signal)
-        filtered_signal /= np.max(np.abs(filtered_signal))
-        return filtered_signal
-
-    def gen_log_decay(self):
-        """Generate a logarithmic decay envelope."""
-        t = np.linspace(0, 1, self.duration)
-        envelope = np.exp(-5 * (1 - t) / self.attack) * np.exp(-5 * t / self.decay)
-        self.envelope
-
-    def gen_linear_decay(self):
-        """Generate a linear decay envelope."""
-        t = np.linspace(0, 1, self.duration)
-        envelope = 1 - t * (1 - np.exp(-5 / self.decay))
-        envelope[t < self.attack] *= t[t < self.attack] / self.attack
-        return envelope
-
-    def gen_double_peak(self):
-        """Generate a double peak envelope."""
-        t = np.linspace(0, 1, self.duration)
-        envelope = np.exp(-5 * (t - 0.5) ** 2 / (0.1 * self.attack**2))
-        envelope *= np.exp(-5 * t / self.decay)
-        return envelope
-
-    def modulate_amplitude(self):
-        """Generate an amplitude-modulated signal (AM) using a modulation envelope."""
-        t = np.linspace(
-            0, self.duration, int(self.sample_rate * self.duration), endpoint=False
-        )
+        # Modulation waveform generation based on modulation type
+        if modulation_type == 'log_decay':
+            modulation_waveform = generate_log_decay(
+                len(t), attack_time=0.1, decay_time=0.5
+            )
+        elif modulation_type == 'sine':
+            modulation_waveform = generate_sine_wave(len(t), frequency=mod_freq)
+        elif modulation_type == 'noise':
+            modulation_waveform = generate_noise(len(t))
+        else:
+            raise ValueError(
+                "Invalid modulation type. Choose from 'log_decay', 'sine', or 'noise'."
+            )
 
         # Carrier signal (sine wave)
-        carrier_signal = np.sin(2 * np.pi * self.source * t)
+        # carrier_signal = np.sin(2 * np.pi * carrier_freq * t)
 
-        # Apply amplitude modulation (AM) with the modulation envelope
-        am_signal = carrier_signal * self.modulation_env
+        # Frequency modulation (FM) by scaling the carrier frequency with the modulation waveform
+        fm_signal = np.sin(
+            2 * np.pi * (carrier_freq + mod_amount * modulation_waveform) * t
+        )
 
-        return am_signal
-
-    def apply_envelope(self):
-        # Apply a simple exponential decay envelope
-        # attack_samples = int(sample_rate * attack_time)
-        # attack_ramp = np.linspace(0, 1, attack_samples)
-        # wave[:attack_samples] *= attack_ramp
-        # decay = np.exp(-t / decay_time)
-        # wave *= decay
-
-        # Generate amplitude-modulated (AM) signal using the selected modulation envelope
-        am_signal = self.modulate_amplitude(self.spectra, self.env_type)
-
-        # Normalize the AM signal to the range [-1, 1]
-        am_signal /= np.max(np.abs(am_signal))
-
-    def generate_log_decay_mod(self):
-        """Generate a logarithmic decay envelope."""
-        t = np.linspace(0, 1, self.num_samples)
-        mod_src = np.exp(-5 * (1 - t) / self.attack) * np.exp(-5 * t / self.decay)
-        return mod_src
-
-    # def generate_sine_wave(self):
-    #     """Generate a sine wave for mod, but other generator can be used."""
-    #     t = np.linspace(0, self.duration, self.num_samples, endpoint=False)
-    #     waveform = np.sin(2 * np.pi * self.frequency * t)
-    #     return waveform
-
-    # def generate_noise(self):
-    #     """Generate white noise for mod."""
-    #     noise = np.random.uniform(low=-1.0, high=1.0, size=self.num_samples)
-    #     return noise
-
-    # def frequency_modulation(carrier_freq, modulation_type, mod_freq, mod_amount):
-    #     """Generate a frequency-modulated signal (FM)."""
-    #     t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
-
-    #     # Modulation waveform generation based on modulation type
-    #     if modulation_type == 'log_decay':
-    #         modulation_waveform = generate_log_decay(len(t), attack_time=0.1, decay_time=0.5)
-    #     elif modulation_type == 'sine':
-    #         modulation_waveform = generate_sine_wave(len(t), frequency=mod_freq)
-    #     elif modulation_type == 'noise':
-    #         modulation_waveform = generate_noise(len(t))
-    #     else:
-    #         raise ValueError("Invalid modulation type. Choose from 'log_decay', 'sine', or 'noise'.")
-
-    #     # Carrier signal (sine wave)
-    #     carrier_signal = np.sin(2 * np.pi * carrier_freq * t)
-
-    # Frequency modulation (FM) by scaling the carrier frequency with the modulation waveform
-    # fm_signal = np.sin(2 * np.pi * (carrier_freq + mod_amount * modulation_waveform) * t)
-
-    # return fm_signal
+        return fm_signal
 
 
 @dataclass
@@ -699,8 +625,6 @@ class GenericLayer(SynthLayer):
     env_type: str = "linear"
     frequency: int = 440
     detune: int = 10
-    attack: float = 0.01  # Duration of the synthesized sound (seconds)
-    decay: float = 2.0
     mod_amount: float = 1.0
     mod_rate: int = 220
     dynamic_filter: float = 0
@@ -1529,3 +1453,108 @@ class GenericLayer(SynthLayer):
 #         output_signal = sosfilt(sos, audio_signal)
 
 #         return output_signal
+
+# class ProbablyDupes:
+#         def gen_sine_wave(self, pitch_override=0):
+#         """Generate Sine Wave"""
+#         if not pitch_override:
+#             pitch_override = self.frequency
+#         t = np.linspace(0, self.duration, self.num_samples, endpoint=False)
+#         sine_wave = np.sin(2 * np.pi * pitch_override * t)
+#         sine_wave /= np.max(np.abs(sine_wave))
+#         return sine_wave
+
+#     def apply_high_pass_filter(self, signal, cutoff_frequency):
+#         """Apply a high-pass Butterworth filter to the signal."""
+#         nyquist_freq = 0.5 * self.sample_rate
+#         normal_cutoff = cutoff_frequency / nyquist_freq
+#         b, a = butter(4, normal_cutoff, btype="high", analog=True)
+#         filtered_signal = lfilter(b=b, a=a, x=signal)
+#         filtered_signal /= np.max(np.abs(filtered_signal))
+#         return filtered_signal
+
+#     def apply_band_pass_filter(self, signal, cutoff_frequency, width=100):
+#         """Apply a dynamic bandpass filter with variable cutoff frequency and resonance (Q-factor)."""
+#         # Calculate lower and upper cutoff frequencies for the bandpass filter
+#         nyquist_freq = 0.5 * self.sample_rate
+#         lower_cutoff = (cutoff_frequency - (width)) / nyquist_freq
+#         upper_cutoff = (cutoff_frequency + (width)) / nyquist_freq
+#         # Design a bandpass Butterworth filter with specified cutoff frequencies and order
+#         order = 4  # Filter order
+#         b_bandpass, a_bandpass = butter(
+#             order,
+#             [lower_cutoff, upper_cutoff],
+#             btype="bandpass",
+#             fs=self.sample_rate,
+#             output="ba",
+#         )
+
+# Apply the bandpass filter to the audio signal
+#     filtered_signal = lfilter(b_bandpass, a_bandpass, signal)
+#     filtered_signal /= np.max(np.abs(filtered_signal))
+#     return filtered_signal
+
+# def gen_log_decay(self):
+#     """Generate a logarithmic decay envelope."""
+#     t = np.linspace(0, 1, self.duration)
+#     envelope = np.exp(-5 * (1 - t) / self.attack) * np.exp(-5 * t / self.decay)
+#     self.envelope
+
+# def gen_linear_decay(self):
+#     """Generate a linear decay envelope."""
+#     t = np.linspace(0, 1, self.duration)
+#     envelope = 1 - t * (1 - np.exp(-5 / self.decay))
+#     envelope[t < self.attack] *= t[t < self.attack] / self.attack
+#     return envelope
+
+# def gen_double_peak(self):
+#     """Generate a double peak envelope."""
+#     t = np.linspace(0, 1, self.duration)
+#     envelope = np.exp(-5 * (t - 0.5) ** 2 / (0.1 * self.attack**2))
+#     envelope *= np.exp(-5 * t / self.decay)
+#     return envelope
+
+# def modulate_amplitude(self):
+#     """Generate an amplitude-modulated signal (AM) using a modulation envelope."""
+#     t = np.linspace(
+#         0, self.duration, int(self.sample_rate * self.duration), endpoint=False
+#     )
+
+# Carrier signal (sine wave)
+# carrier_signal = np.sin(2 * np.pi * self.source * t)
+
+# Apply amplitude modulation (AM) with the modulation envelope
+# am_signal = carrier_signal * self.modulation_env
+
+# return am_signal
+
+# def apply_envelope(self):
+# Apply a simple exponential decay envelope
+# attack_samples = int(sample_rate * attack_time)
+# attack_ramp = np.linspace(0, 1, attack_samples)
+# wave[:attack_samples] *= attack_ramp
+# decay = np.exp(-t / decay_time)
+# wave *= decay
+
+# Generate amplitude-modulated (AM) signal using the selected modulation envelope
+# am_signal = self.modulate_amplitude(self.spectra, self.env_type)
+
+# Normalize the AM signal to the range [-1, 1]
+#     am_signal /= np.max(np.abs(am_signal))
+
+# def generate_log_decay_mod(self):
+#     """Generate a logarithmic decay envelope."""
+#     t = np.linspace(0, 1, self.num_samples)
+#     mod_src = np.exp(-5 * (1 - t) / self.attack) * np.exp(-5 * t / self.decay)
+#     return mod_src
+
+# def generate_sine_wave(self):
+#     """Generate a sine wave for mod, but other generator can be used."""
+#     t = np.linspace(0, self.duration, self.num_samples, endpoint=False)
+#     waveform = np.sin(2 * np.pi * self.frequency * t)
+#     return waveform
+
+# def generate_noise(self):
+#     """Generate white noise for mod."""
+#     noise = np.random.uniform(low=-1.0, high=1.0, size=self.num_samples)
+#     return noise
