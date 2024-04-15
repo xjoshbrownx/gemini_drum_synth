@@ -91,6 +91,11 @@ class Layer:
     #     sd.play(audio, samplerate=sample_rate)
     #     sd.wait()
 
+    def normalize_audio(self, audio):
+        """Normalize audio signal to between -1 and 1"""
+        audio /= np.max(np.abs(audio))
+        return audio
+
     def save_layer(self, filename):
         """
         Save the audio signal to a WAV file.
@@ -307,21 +312,21 @@ class SynthLayer(Layer):
 
         return am_signal
 
-    def apply_envelope(self):
-        # Apply a simple exponential decay envelope
-        # attack_samples = int(sample_rate * attack_time)
-        # attack_ramp = np.linspace(0, 1, attack_samples)
-        # wave[:attack_samples] *= attack_ramp
-        # decay = np.exp(-t / decay_time)
-        # wave *= decay
+    # def apply_envelope(self, signal, envelop_method):
+    #     # Apply a simple exponential decay envelope
+    #     # attack_samples = int(sample_rate * attack_time)
+    #     # attack_ramp = np.linspace(0, 1, attack_samples)
+    #     # wave[:attack_samples] *= attack_ramp
+    #     # decay = np.exp(-t / decay_time)
+    #     # wave *= decay
 
-        # Generate amplitude-modulated (AM) signal using the selected modulation envelope
-        am_signal = self.modulate_amplitude(self.spectra, self.env_type)
+    #     # Generate amplitude-modulated (AM) signal using the selected modulation envelope
+    #     am_signal = self.modulate_amplitude(self.spectra, self.env_type)
 
-        # Normalize the AM signal to the range [-1, 1]
-        am_signal /= np.max(np.abs(am_signal))
+    #     # Normalize the AM signal to the range [-1, 1]
+    #
 
-        return am_signal
+    #     return am_signal
 
 
 @dataclass
@@ -433,6 +438,7 @@ class NoiseLayer(SynthLayer):
         self.noise_decay_envelope = decay_translate.get(self.decay_type, 'E')()
         self.layer_audio = self.gen_white_noise()
         self.filter_noise()
+        self.apply_noise_envelope()
 
     def filter_noise(self):
         """
@@ -443,29 +449,29 @@ class NoiseLayer(SynthLayer):
         Returns:
             ndarray: NumPy array containing the generated click sound waveform.
         """
-        # self.num_samples = 44100  # TEMP
-        pbaf = AudioFile.encode(
-            samples=self.layer_audio,
-            samplerate=float(self.sample_rate),
-            format='wav',
-            num_channels=self.num_channels,
-            bit_depth=self.bit_depth,
-        )
         board = Pedalboard([LadderFilter()])[0]
         board.mode = self.filter_mode
         board.cutoff_hz = self.freq
-        board.drive = 1.0
+        board.drive = 1
         board.resonance = self.resonance
-        self.layer_audio = board.process(pbaf)
+        self.layer_audio = board.process(
+            input_array=self.layer_audio, sample_rate=self.sample_rate
+        )
 
+    def apply_noise_envelope(self):
+        self.layer_audio = self.normalize_audio(
+            self.noise_decay_envelope * self.layer_audio
+        )
+
+        # FOR DYNAMIC FILTER
         # step_size = 1000
         # for i in range(0, af.frames, step_size_in_samples):
         #     chunk = af.read(step_size_in_samples)
 
         #     # Set the reverb's "wet" parameter to be equal to the
         #     # percentage through the track (i.e.: make a ramp from 0% to 100%)
-        #     percentage_through_track = i / af.frames
-        #     board[0].cutoff_hz= = percentage_through_track
+        # percentage_through_track = i / af.frames
+        # board[0].cutoff_hz = percentage_through_track
 
         #         # Update our progress bar with the number of samples received:
         #         pbar.update(chunk.shape[1])
