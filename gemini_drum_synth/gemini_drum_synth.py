@@ -403,7 +403,7 @@ class ClickLayer(SynthLayer):
 
 @dataclass
 class NoiseLayer(SynthLayer):
-    """Noise layer"""
+    """Drum Sound Layer based on the Synthesis in Nord Drum 3P"""
 
     # noise_type: str = 'white'
     filter_type: str = 'L2'  # low pass 4 pole
@@ -454,19 +454,28 @@ class NoiseLayer(SynthLayer):
         board.cutoff_hz = self.freq
         board.drive = 1
         board.resonance = self.resonance
-        self.layer_audio = board.process(
-            input_array=self.layer_audio, sample_rate=self.sample_rate
-        )
 
-    def apply_noise_envelope(self):
-        self.layer_audio = self.normalize_audio(
-            self.noise_decay_envelope * self.layer_audio
-        )
-
-        # FOR DYNAMIC FILTER
-        # step_size = 1000
-        # for i in range(0, af.frames, step_size_in_samples):
-        #     chunk = af.read(step_size_in_samples)
+        if self.dynamic_filter:
+            # FOR DYNAMIC FILTER
+            # TODO CREATE CURVE AND ADAPT IT TO THE WEIRD LOW_PASS NEGATIVE HIGH PASS POSTIVE LOGIC. TEST WITH SOUNDS
+            step_size_in_samples = 100
+            output = []
+            for i in range(0, self.num_samples, step_size_in_samples):
+                #     chunk = af.read(step_size_in_samples)
+                # if self.filter_type.startswith('L'):
+                #     board.cutoff_hz = self.freq
+                output.append(
+                    board.process(
+                        input_array=self.layer_audio[i : i + step_size_in_samples],
+                        sample_rate=self.sample_rate,
+                        reset=False,
+                    )
+                )
+            self.layer_audio = np.concatenate(output, axis=0)
+        else:
+            self.layer_audio = board.process(
+                input_array=self.layer_audio, sample_rate=self.sample_rate
+            )
 
         #     # Set the reverb's "wet" parameter to be equal to the
         #     # percentage through the track (i.e.: make a ramp from 0% to 100%)
@@ -480,6 +489,15 @@ class NoiseLayer(SynthLayer):
         #         # to ensure that reverb tails aren't cut off
         #         output = board.process(chunk, af.samplerate, reset=False)
         #         o.write(output)
+
+        # self.layer_audio = board.process(
+        #     input_array=self.layer_audio, sample_rate=self.sample_rate
+        # )
+
+    def apply_noise_envelope(self):
+        self.layer_audio = self.normalize_audio(
+            self.noise_decay_envelope * self.layer_audio
+        )
 
 
 @dataclass
