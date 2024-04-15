@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from scipy.io import wavfile
 from scipy.signal import butter, lfilter, iirpeak, sosfilt, resample as sci_resample
 from pathlib import Path
+from pedalboard.io import AudioFile
 from pedalboard import (
     Compressor,
     LadderFilter,
@@ -47,6 +48,8 @@ class Sound:
 
 @dataclass
 class Layer:
+    num_channels = 1
+    bit_depth: int = 16
     sample_rate: int = 44100
     level: float = 0.5
     wave_guide_send: int = 0
@@ -106,11 +109,11 @@ class Layer:
 @dataclass
 class SynthLayer(Layer):
     pitch: int = 0  # adjust pitch of  click sound in semitones (postive or negative)
-    duration: float = 0.01
-    attack: float = 0.01  # Duration of the synthesized sound (seconds)
-    decay: float = 2.0
+    attack: float = 0.000001  # Duration of the attack of synthesized sound (seconds) to avoid divide by zero errors
+    decay: float = 2.0  # Duration of the decay synthesized sound (seconds)
 
     def __post_init__(self):
+        self.duration = self.attack + self.decay
         self.num_samples = int(self.duration * self.sample_rate)
 
     def gen_sine_wave(self, pitch_override=0):
@@ -262,9 +265,11 @@ class SynthLayer(Layer):
 
     def gen_log_decay(self):
         """Generate a logarithmic decay envelope."""
-        t = np.linspace(0, 1, self.duration)
-        envelope = np.exp(-5 * (1 - t) / self.attack) * np.exp(-5 * t / self.decay)
-        self.envelope
+        t = np.linspace(0, 1, self.num_samples)
+        rise = np.exp(-5 * (1 - t) / self.attack) if self.attack else 1
+        fall = np.exp(-5 * t / self.decay) if self.decay else 1
+        envelope = rise * fall
+        return envelope
 
     def gen_linear_decay(self):
         """Generate a linear decay envelope."""
@@ -281,7 +286,8 @@ class SynthLayer(Layer):
         return envelope
 
     def gen_gate_decay(self):
-        np.ones
+        # TODO
+        return np.ones(self.num_samples)
 
     def gen_punch_decay(self):
         # TODO
@@ -328,6 +334,7 @@ class ClickLayer(SynthLayer):
     click_type: str = 'N1'
 
     def __post_init__(self):
+        super().__post_init__()
         self.attack = 0
         self.gen_click()
 
@@ -346,7 +353,7 @@ class ClickLayer(SynthLayer):
         num_samples = int(self.duration * self.sample_rate)
         t = np.linspace(0, self.duration, num_samples, endpoint=False)
         click_envelope = np.exp(-5 * t)  # Exponential decay envelope
-        print(num_samples)
+        # print(num_samples)
 
         if self.click_type == 'S1':
             # Generate a simple click (cosine wave envelope)
@@ -403,7 +410,11 @@ class NoiseLayer(SynthLayer):
     # drive: float = 1.0
 
     def __post_init__(self):
+        super().__post_init__()
         self.attack = 0
+        # print('does this print')
+        # print(self.num_samples)
+        # self.duration = self.attack + self.decay
         filter_translate = {
             'L1': LadderFilter.LPF12,
             'L2': LadderFilter.LPF24,
@@ -419,10 +430,11 @@ class NoiseLayer(SynthLayer):
             'P': self.gen_punch_decay,
         }
         self.filter_mode = filter_translate.get(self.filter_type, 'L2')
-        self.decay_model = decay_translate.get(self.decay_type, 'E')
-        self.gen_noise()
+        self.noise_decay_envelope = decay_translate.get(self.decay_type, 'E')()
+        self.layer_audio = self.gen_white_noise()
+        self.filter_noise()
 
-    def gen_noise(self):
+    def filter_noise(self):
         """
         Generate a noise sound waveform of the specified type.
 
@@ -431,14 +443,20 @@ class NoiseLayer(SynthLayer):
         Returns:
             ndarray: NumPy array containing the generated click sound waveform.
         """
-        self.num_samples = 44100  # TEMP
-        self.layer_audio = self.gen_white_noise()
+        # self.num_samples = 44100  # TEMP
+        pbaf = AudioFile.encode(
+            samples=self.layer_audio,
+            samplerate=float(self.sample_rate),
+            format='wav',
+            num_channels=self.num_channels,
+            bit_depth=self.bit_depth,
+        )
         board = Pedalboard([LadderFilter()])[0]
         board.mode = self.filter_mode
         board.cutoff_hz = self.freq
         board.drive = 1.0
         board.resonance = self.resonance
-        self.layer_audio = board.process(self.layer_audio)
+        self.layer_audio = board.process(pbaf)
 
         # step_size = 1000
         # for i in range(0, af.frames, step_size_in_samples):
@@ -485,7 +503,7 @@ class ToneLayer(SynthLayer):
             # 'A6':self.gen_pulse_wave, #analog-style pulse wave
         }
 
-    def gen_simulated_drum_head_sound(Lx, Ly, Nx, Ny, T, dt, c, damping_coeff):
+    def gen_simulated_drum_head_sound(self, Lx, Ly, Nx, Ny, T, dt, c, damping_coeff):
         """
         Simulate a 2D waveguide model for a drum head with damping using finite difference method.
 
@@ -570,19 +588,21 @@ class ToneLayer(SynthLayer):
         #         Lx, Ly, Nx, Ny, T, dt, c, damping_coeff
         #     )
 
-    def frequency_modulation(carrier_freq, modulation_type, mod_freq, mod_amount):
+    def frequency_modulation(self, carrier_freq, modulation_type, mod_freq, mod_amount):
         """Generate a frequency-modulated signal (FM)."""
-        t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
+        t = np.linspace(
+            0, self.duration, int(self.sample_rate * self.duration), endpoint=False
+        )
 
         # Modulation waveform generation based on modulation type
         if modulation_type == 'log_decay':
-            modulation_waveform = generate_log_decay(
+            modulation_waveform = self.gen_log_decay(
                 len(t), attack_time=0.1, decay_time=0.5
             )
         elif modulation_type == 'sine':
-            modulation_waveform = generate_sine_wave(len(t), frequency=mod_freq)
+            modulation_waveform = self.gen_sine_wave()
         elif modulation_type == 'noise':
-            modulation_waveform = generate_noise(len(t))
+            modulation_waveform = self.gen_white_noise()
         else:
             raise ValueError(
                 "Invalid modulation type. Choose from 'log_decay', 'sine', or 'noise'."
