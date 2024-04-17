@@ -118,8 +118,12 @@ class SynthLayer(Layer):
     decay: float = 2.0  # Duration of the decay synthesized sound (seconds)
 
     def __post_init__(self):
+        self.attack = self.attack if self.attack else 0.00001
         self.duration = self.attack + self.decay
-        self.num_samples = int(self.duration * self.sample_rate)
+        self.attack_samples = int(np.ceil(self.attack * self.sample_rate))
+        self.decay_samples = int(self.decay * self.sample_rate)
+        self.num_samples = int(self.attack_samples + self.decay_samples)
+        self.env_t = np.linspace(0, 1, self.num_samples)
 
     def gen_sine_wave(self, pitch_override=0):
         """
@@ -268,13 +272,13 @@ class SynthLayer(Layer):
 
         return blue_noise
 
-    def gen_log_decay(self):
+    def gen_log_decay(self, degree=2):
         """Generate a logarithmic decay envelope."""
-        t = np.linspace(0, 1, self.num_samples)
-        rise = np.exp(-5 * (1 - t) / self.attack) if self.attack else 1
-        fall = np.exp(-5 * t / self.decay) if self.decay else 1
-        envelope = rise * fall
-        return envelope
+        degree = -{1: 2.5, 2: 5, 3: 10}.get(degree)
+        rise = np.exp(degree * (1 - self.env_t) / self.attack)[: self.attack_samples]
+        fall = np.exp(degree * self.env_t / self.decay)[: self.decay_samples]
+        envelope = np.concatenate([rise, fall])
+        return envelope[: self.num_samples]
 
     def gen_linear_decay(self):
         """Generate a linear decay envelope."""
@@ -283,12 +287,20 @@ class SynthLayer(Layer):
         envelope[t < self.attack] *= t[t < self.attack] / self.attack
         return envelope
 
-    def gen_double_peak(self):
+    def gen_double_peak(self, seperation=0.1, degree=2):
         """Generate a double peak envelope."""
-        t = np.linspace(0, 1, self.duration)
-        envelope = np.exp(-5 * (t - 0.5) ** 2 / (0.1 * self.attack**2))
-        envelope *= np.exp(-5 * t / self.decay)
-        return envelope
+        # t = np.linspace(0, 1, self.num_samples)
+        degree = -{1: 2.5, 2: 5, 3: 10}.get(degree)
+        rise = np.exp(degree * (1 - self.env_t) / self.attack)[: self.attack_samples]
+        fall = np.exp(degree * self.env_t / self.decay)[: self.decay_samples]
+        envelope = np.concatenate([rise, fall])
+        shift_amt = int(self.num_samples * seperation)
+        zeros = np.zeros(shift_amt)
+        ones = np.ones(int(self.num_samples - shift_amt))
+        # mask = np.concatenate((zeros,ones))
+        reenvlope = np.roll(envelope, shift_amt)
+        remix = np.max((envelope, reenvlope), axis=0)
+        return remix
 
     def gen_gate_decay(self):
         # TODO
@@ -460,6 +472,7 @@ class NoiseLayer(SynthLayer):
             # TODO CREATE CURVE AND ADAPT IT TO THE WEIRD LOW_PASS NEGATIVE HIGH PASS POSTIVE LOGIC. TEST WITH SOUNDS
             step_size_in_samples = 100
             output = []
+
             for i in range(0, self.num_samples, step_size_in_samples):
                 #     chunk = af.read(step_size_in_samples)
                 # if self.filter_type.startswith('L'):
