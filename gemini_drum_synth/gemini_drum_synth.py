@@ -124,6 +124,8 @@ class SynthLayer(Layer):
         self.decay_samples = int(self.decay * self.sample_rate)
         self.num_samples = int(self.attack_samples + self.decay_samples)
         self.env_t = np.linspace(0, 1, self.num_samples)
+        self.att_t = np.linspace(0, 1, self.attack_samples)
+        self.dec_t = np.linspace(0, 1, self.decay_samples)
 
     def gen_sine_wave(self, pitch_override=0):
         """
@@ -272,73 +274,64 @@ class SynthLayer(Layer):
 
         return blue_noise
 
-    def gen_log_decay(self, degree=2):
-        """Generate a logarithmic decay envelope."""
-        degree = -{1: 2.5, 2: 5, 3: 10}.get(degree)
-        rise = np.exp(degree * (1 - self.env_t) / self.attack)[: self.attack_samples]
-        fall = np.exp(degree * self.env_t / self.decay)[: self.decay_samples]
-        envelope = np.concatenate([rise, fall])
-        return envelope[: self.num_samples]
+    def gen_log_decay(self, degree=50):
+        """Generate a logarithmic decay."""
+        base = 0.95**degree
+        log_decay = np.flip(np.logspace(1, 0, self.decay_samples, base=base))
+        return (log_decay - np.min(log_decay)) / (np.max(log_decay) - np.min(log_decay))
 
-    def gen_linear_decay(self):
-        """Generate a linear decay envelope."""
-        t = np.linspace(0, 1, self.duration)
-        envelope = 1 - t * (1 - np.exp(-5 / self.decay))
-        envelope[t < self.attack] *= t[t < self.attack] / self.attack
-        return envelope
-
-    def gen_double_peak(self, seperation=0.1, degree=2):
-        """Generate a double peak envelope."""
-        # t = np.linspace(0, 1, self.num_samples)
-        degree = -{1: 2.5, 2: 5, 3: 10}.get(degree)
-        rise = np.exp(degree * (1 - self.env_t) / self.attack)[: self.attack_samples]
-        fall = np.exp(degree * self.env_t / self.decay)[: self.decay_samples]
-        envelope = np.concatenate([rise, fall])
-        shift_amt = int(self.num_samples * seperation)
-        zeros = np.zeros(shift_amt)
-        ones = np.ones(int(self.num_samples - shift_amt))
-        # mask = np.concatenate((zeros,ones))
-        reenvlope = np.roll(envelope, shift_amt)
-        remix = np.max((envelope, reenvlope), axis=0)
-        return remix
-
-    def gen_gate_decay(self):
-        # TODO
-        return np.ones(self.num_samples)
-
-    def gen_punch_decay(self):
-        # TODO
-        return self.gen_log_decay()
-
-    def modulate_amplitude(self):
-        """Generate an amplitude-modulated signal (AM) using a modulation envelope."""
-        t = np.linspace(
-            0, self.duration, int(self.sample_rate * self.duration), endpoint=False
+    def gen_log_attack(self, degree=50):
+        """Generate a logarithmic attack."""
+        base = 0.95**degree
+        log_attack = np.flip(np.logspace(1, 0, self.attack_samples, base=base))
+        return (log_attack - np.min(log_attack)) / (
+            np.max(log_attack) - np.min(log_attack)
         )
 
-        # Carrier signal (sine wave)
-        carrier_signal = np.sin(2 * np.pi * self.source * t)
+    def gen_lin_attack(self):
+        """Generate a linear attack."""
+        return np.linspace(0, 1, self.attack_samples)
 
-        # Apply amplitude modulation (AM) with the modulation envelope
-        am_signal = carrier_signal * self.modulation_env
+    def gen_lin_decay(self):
+        """Generate a linear decay."""
+        return np.linspace(1, 0, self.decay_samples)
 
-        return am_signal
+    def gen_lin_log_ad_env(self, degree=50):
+        """Generate a linear attack / logrithmic decay envelope."""
+        rise = self.gen_lin_attack()
+        fall = self.gen_log_decay(degree=degree)
+        envelope = np.concatenate([rise, fall])
+        self.num_samples = rise.shape[0] + fall.shape[0]
+        return envelope[: self.num_samples]
 
-    # def apply_envelope(self, signal, envelop_method):
-    #     # Apply a simple exponential decay envelope
-    #     # attack_samples = int(sample_rate * attack_time)
-    #     # attack_ramp = np.linspace(0, 1, attack_samples)
-    #     # wave[:attack_samples] *= attack_ramp
-    #     # decay = np.exp(-t / decay_time)
-    #     # wave *= decay
+    def gen_log_log_ad_env(self, degree=50):
+        rise = self.gen_log_attack(degree=degree)
+        fall = self.gen_log_decay(degree=degree)
+        envelope = np.concatenate([rise, fall])
+        self.num_samples = rise.shape[0] + fall.shape[0]
+        return envelope[: self.num_samples]
 
-    #     # Generate amplitude-modulated (AM) signal using the selected modulation envelope
-    #     am_signal = self.modulate_amplitude(self.spectra, self.env_type)
+    def gen_lin_env(self, degree=50):
+        """Generate a linear attack / logrithmic decay envelope."""
+        rise = self.gen_lin_attack()
+        fall = self.gen_lin_decay()
+        envelope = np.concatenate([rise, fall])
+        self.num_samples = rise.shape[0] + fall.shape[0]
+        return envelope[: self.num_samples]
 
-    #     # Normalize the AM signal to the range [-1, 1]
-    #
-
-    #     return am_signal
+    def gen_double_peak_env(self, seperation=0.1, degree=50):
+        """Generate a double peak envelope."""
+        # t = np.linspace(0, 1, self.num_samples)
+        shift_amt = int(self.num_samples * seperation)
+        envelope = self.gen_lin_log_ad_env(degree=degree)
+        zeros = np.zeros(shift_amt)
+        ones = np.ones(int(self.num_samples - shift_amt))
+        mask = np.concatenate((ones, zeros))
+        reenvlope = np.roll(np.min((envelope, mask), axis=0), shift_amt)
+        tail = envelope[self.num_samples - shift_amt :]
+        remix = np.concatenate((np.max((envelope, reenvlope), axis=0), tail))
+        self.num_samples = self.num_samples + shift_amt
+        return remix
 
 
 @dataclass
@@ -367,10 +360,10 @@ class ClickLayer(SynthLayer):
         Returns:
             ndarray: NumPy array containing the generated click sound waveform.
         """
-        num_samples = int(self.duration * self.sample_rate)
-        t = np.linspace(0, self.duration, num_samples, endpoint=False)
+        num_click_samples = int(self.duration * self.sample_rate)
+        t = np.linspace(0, self.duration, num_click_samples, endpoint=False)
         click_envelope = np.exp(-5 * t)  # Exponential decay envelope
-        # print(num_samples)
+        # print(num_click_samples)
 
         if self.click_type == 'S1':
             # Generate a simple click (cosine wave envelope)
@@ -378,15 +371,15 @@ class ClickLayer(SynthLayer):
 
         elif self.click_type == 'N1':
             # Generate a burst of white noise
-            self.layer_audio = np.random.randn(num_samples)
+            self.layer_audio = np.random.randn(num_click_samples)
 
         elif self.click_type == 'N2':
             # Generate a burst of white noise with short envelop
-            self.layer_audio = np.random.randn(num_samples) * click_envelope
+            self.layer_audio = np.random.randn(num_click_samples) * click_envelope
 
         elif self.click_type == 'I1':
             # Generate an impulse (single-sample spike)
-            self.layer_audio = np.zeros(num_samples)
+            self.layer_audio = np.zeros(num_click_samples)
             self.layer_audio[0] = 1.0
 
         elif self.click_type == 'M1':
