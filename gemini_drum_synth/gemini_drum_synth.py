@@ -464,12 +464,27 @@ class NoiseLayer(SynthLayer):
             # FOR DYNAMIC FILTER
             # TODO CREATE CURVE AND ADAPT IT TO THE WEIRD LOW_PASS NEGATIVE HIGH PASS POSTIVE LOGIC. TEST WITH SOUNDS
             step_size_in_samples = 100
+            if self.dynamic_filter > 0:
+                self.filter_env = (
+                    self.gen_log_decay(degree=self.dynamic_filter * 10)
+                    * self.freq
+                    * 0.05
+                    * self.dynamic_filter
+                ) + self.freq
+            else:
+                self.filter_env = self.freq - (
+                    self.gen_log_decay(degree=self.dynamic_filter * -10)
+                    * self.freq
+                    * 0.05
+                    * -self.dynamic_filter
+                )
             output = []
 
-            for i in range(0, self.num_samples, step_size_in_samples):
+            for i in range(0, self.num_samples - 1, step_size_in_samples):
                 #     chunk = af.read(step_size_in_samples)
                 # if self.filter_type.startswith('L'):
                 #     board.cutoff_hz = self.freq
+                board.cutoff_hz = self.filter_env[i]
                 output.append(
                     board.process(
                         input_array=self.layer_audio[i : i + step_size_in_samples],
