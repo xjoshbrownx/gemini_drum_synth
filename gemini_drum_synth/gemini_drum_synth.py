@@ -333,6 +333,20 @@ class SynthLayer(Layer):
         self.num_samples = self.num_samples + shift_amt
         return remix
 
+    def gen_gate_env(self):
+        # TODO
+        return np.ones(self.num_samples)
+
+    def gen_punch_decay(self):
+        # TODO
+        return self.gen_log_decay()
+
+    def modulate_amplitude(self):
+        """Generate an amplitude-modulated signal (AM) using a modulation envelope."""
+        t = np.linspace(
+            0, self.duration, int(self.sample_rate * self.duration), endpoint=False
+        )
+
 
 @dataclass
 class ClickLayer(SynthLayer):
@@ -435,8 +449,8 @@ class NoiseLayer(SynthLayer):
         }
         decay_translate = {
             'E': self.gen_log_decay,
-            'L': self.gen_linear_decay,
-            'G': self.gen_gate_decay,
+            'L': self.gen_lin_decay,
+            'G': self.gen_gate_env,
             'P': self.gen_punch_decay,
         }
         self.filter_mode = filter_translate.get(self.filter_type, 'L2')
@@ -485,6 +499,7 @@ class NoiseLayer(SynthLayer):
                 # if self.filter_type.startswith('L'):
                 #     board.cutoff_hz = self.freq
                 board.cutoff_hz = self.filter_env[i]
+                # print(board.cutoff_hz)
                 output.append(
                     board.process(
                         input_array=self.layer_audio[i : i + step_size_in_samples],
@@ -517,7 +532,8 @@ class NoiseLayer(SynthLayer):
 
     def apply_noise_envelope(self):
         self.layer_audio = self.normalize_audio(
-            self.noise_decay_envelope * self.layer_audio
+            self.noise_decay_envelope
+            * self.layer_audio[: self.noise_decay_envelope.shape[0]]
         )
 
 
