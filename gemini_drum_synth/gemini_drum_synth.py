@@ -113,19 +113,34 @@ class Layer:
 
 @dataclass
 class SynthLayer(Layer):
-    pitch: int = 0  # adjust pitch of  click sound in semitones (postive or negative)
+    pitch: int = 60  # adjust pitch of sound in semitones 60 = 256hz, 69 = 440hz
     attack: float = 0.000001  # Duration of the attack of synthesized sound (seconds) to avoid divide by zero errors
     decay: float = 2.0  # Duration of the decay synthesized sound (seconds)
 
     def __post_init__(self):
+
         self.attack = self.attack if self.attack else 0.00001
         self.duration = self.attack + self.decay
         self.attack_samples = int(np.ceil(self.attack * self.sample_rate))
         self.decay_samples = int(self.decay * self.sample_rate)
         self.num_samples = int(self.attack_samples + self.decay_samples)
-        self.env_t = np.linspace(0, 1, self.num_samples)
-        self.att_t = np.linspace(0, 1, self.attack_samples)
-        self.dec_t = np.linspace(0, 1, self.decay_samples)
+        self.env_t = self.get_t(num_samples=self.num_samples)
+        self.att_t = self.get_t(num_samples=self.attack_samples)
+        self.dec_t = self.get_t(num_samples=self.decay_samples)
+        # self.env_t = np.linspace(0, 1, self.num_samples)
+        # self.att_t = np.linspace(0, 1, self.attack_samples)
+        # self.dec_t = np.linspace(0, 1, self.decay_samples)
+        self.frequency = 2 ** ((self.pitch - 69) / 12) * 440
+
+    def get_t(self, num_samples=0):
+        if num_samples:
+            return np.linspace(0, 1, num_samples, endpoint=False)
+        elif self.num_click_samples:
+            return np.linspace(0, 1, self.num_click_samples, endpoint=False)
+        else:
+            return np.linspace(0, 1, self.num_samples, endpoint=False)
+
+    ####WAVE#OSCILLATORS####
 
     def gen_sine_wave(self, pitch_override=0):
         """
@@ -191,6 +206,103 @@ class SynthLayer(Layer):
         t = np.linspace(0, self.duration, self.num_samples, endpoint=False)
         square_wave = np.sign(np.sin(2 * np.pi * pitch_override * t))
         return square_wave
+
+    ####CLICK#SOUND#GENERATORS####
+
+    def gen_click(self, click_type, click_duration):
+        """
+        Generate a click sound waveform of the specified type.
+
+        Parameters:
+            click_type (str): Type of click sound ('simple', 'white_noise', 'impulse').
+            duration (float): Duration of the click sound in seconds (default: 0.01 seconds).
+            sample_rate (int): Sampling rate of the audio waveform (samples per second, default: 44100).
+
+        Returns:
+            ndarray: NumPy array containing the generated click sound waveform.
+        """
+        self.num_click_samples = int(click_duration * self.sample_rate)
+
+        # Exponential decay envelope
+        # print(num_click_samples)
+
+        if click_type == 'S1':
+            # Generate a simple click (cosine wave envelope)
+            self.layer_audio = (
+                np.cos(2 * np.pi * 1000 * self.get_t()) * self.gen_click_env()
+            )
+
+        elif click_type == 'N1':
+            # Generate a burst of white noise
+            self.layer_audio = np.random.randn(self.num_click_samples)
+
+        elif click_type == 'N2':
+            # Generate a burst of white noise with short envelope
+            self.layer_audio = (
+                np.random.randn(self.num_click_samples) * self.gen_click_env()
+            )
+
+        elif click_type == 'I1':
+            # Generate an impulse (single-sample spike)
+            self.layer_audio = np.zeros(self.num_click_samples)
+            self.layer_audio[0] = 1.0
+
+        elif click_type == 'M1':
+            # Generate an metallic click (High-frequency sinusoidal component)
+            high_freq_component = np.sin(2 * np.pi * 3000 * self.get_t())
+            # Combine envelope with high-frequency component
+            self.layer_audio = self.gen_click_env() * high_freq_component
+
+        elif click_type == 'T1':
+            # Envelope shaping for thud click
+            low_freq_component = np.sin(
+                2 * np.pi * 200 * self.get_t()
+            )  # Low-frequency sinusoidal component
+
+            # Combine envelope with low-frequency component
+            self.layer_audio = self.gen_click_env() * low_freq_component
+
+        else:
+            raise ValueError(
+                f"Invalid click_type '{click_type}'. Choose from 'simple', 'white_noise', or 'impulse'."
+            )
+
+        if self.pitch:
+            self.layer_audio = self.pitch_change_semitones(self.layer_audio, self.pitch)
+
+    ####PHYSICAL#MODELLING#OSCILLATORS####
+
+    def karplus_strong(self):
+        """
+        Generate a noise sound waveform of the specified type.
+
+        Parameters:
+
+        Returns:
+            ndarray: NumPy array containing the generated click sound waveform.
+        """
+        output = []
+        board = Pedalboard([Delay(), LadderFilter()])
+        board[0].delay_seconds = 0.01
+        board[0].feedback = 0.1
+        board[0].mix = 0.5
+        self.layer_audio = board(
+            self.gen_click(click_type='N2'), sample_rate=self.sample_rate
+        )
+        # step_size_in_samples = 100
+        # for i in range(0, self.num_samples-1, step_size_in_samples):
+        #     #     chunk = af.read(step_size_in_samples)
+        #     # if self.filter_type.startswith('L'):
+        #     #     board.cutoff_hz = self.freq
+        #     output.append(
+        #         board.process(
+        #             input_array=self.layer_audio[i : i + step_size_in_samples],
+        #             sample_rate=self.sample_rate,
+        #             reset=False,
+        #         ))
+        return self.layer_audio
+
+    ####NOISE#GENERATORS####
 
     def gen_white_noise(self):
         """
@@ -274,6 +386,8 @@ class SynthLayer(Layer):
 
         return blue_noise
 
+    ####ENVELOPE#COMPONENT#GENERATORS####
+
     def gen_log_decay(self, degree=50):
         """Generate a logarithmic decay."""
         base = 0.95**degree
@@ -295,6 +409,11 @@ class SynthLayer(Layer):
     def gen_lin_decay(self):
         """Generate a linear decay."""
         return np.linspace(1, 0, self.decay_samples)
+
+    ####ENVELOPE#GENERATORS####
+
+    def gen_click_env(self):
+        return np.exp(-5 * self.get_t())
 
     def gen_lin_log_ad_env(self, degree=50):
         """Generate a linear attack / logrithmic decay envelope."""
@@ -341,6 +460,8 @@ class SynthLayer(Layer):
         # TODO
         return self.gen_log_decay()
 
+    ####MODULATION#FUNCTIONS####
+
     def modulate_amplitude(self):
         """Generate an amplitude-modulated signal (AM) using a modulation envelope."""
         t = np.linspace(
@@ -349,80 +470,25 @@ class SynthLayer(Layer):
 
 
 @dataclass
-class ClickLayer(SynthLayer):
+class ND_ClickLayer(SynthLayer):
     """
-    TODO: add level, sends, etc.
+    sends, etc.
     Creates transient sounds alliveiating the need for frequency modulation to achieve this affect
     """
 
     click_type: str = 'N1'
+    click_duration: float = 0.1
 
     def __post_init__(self):
         super().__post_init__()
         self.attack = 0
-        self.gen_click()
-
-    def gen_click(self):
-        """
-        Generate a click sound waveform of the specified type.
-
-        Parameters:
-            click_type (str): Type of click sound ('simple', 'white_noise', 'impulse').
-            duration (float): Duration of the click sound in seconds (default: 0.01 seconds).
-            sample_rate (int): Sampling rate of the audio waveform (samples per second, default: 44100).
-
-        Returns:
-            ndarray: NumPy array containing the generated click sound waveform.
-        """
-        num_click_samples = int(self.duration * self.sample_rate)
-        t = np.linspace(0, self.duration, num_click_samples, endpoint=False)
-        click_envelope = np.exp(-5 * t)  # Exponential decay envelope
-        # print(num_click_samples)
-
-        if self.click_type == 'S1':
-            # Generate a simple click (cosine wave envelope)
-            self.layer_audio = np.cos(2 * np.pi * 1000 * t) * click_envelope
-
-        elif self.click_type == 'N1':
-            # Generate a burst of white noise
-            self.layer_audio = np.random.randn(num_click_samples)
-
-        elif self.click_type == 'N2':
-            # Generate a burst of white noise with short envelop
-            self.layer_audio = np.random.randn(num_click_samples) * click_envelope
-
-        elif self.click_type == 'I1':
-            # Generate an impulse (single-sample spike)
-            self.layer_audio = np.zeros(num_click_samples)
-            self.layer_audio[0] = 1.0
-
-        elif self.click_type == 'M1':
-            # Generate an metallic click (High-frequency sinusoidal component)
-            high_freq_component = np.sin(2 * np.pi * 3000 * t)
-            # Combine envelope with high-frequency component
-            self.layer_audio = click_envelope * high_freq_component
-
-        elif self.click_type == 'T1':
-            # Envelope shaping for thud click
-            low_freq_component = np.sin(
-                2 * np.pi * 200 * t
-            )  # Low-frequency sinusoidal component
-
-            # Combine envelope with low-frequency component
-            self.layer_audio = click_envelope * low_freq_component
-
-        else:
-            raise ValueError(
-                f"Invalid click_type '{self.click_type}'. Choose from 'simple', 'white_noise', or 'impulse'."
-            )
-
-        if self.pitch:
-            self.layer_audio = self.pitch_change_semitones(self.layer_audio, self.pitch)
+        self.gen_click(click_type=self.click_type, click_duration=self.click_duration)
+        self.layer_audio *= self.level
 
 
 @dataclass
-class NoiseLayer(SynthLayer):
-    """Drum Sound Layer based on the Synthesis in Nord Drum 3P"""
+class ND_NoiseLayer(SynthLayer):
+    """Drum Sound Layer based on the Noise Layer Synthesis in Nord Drum 3P"""
 
     # noise_type: str = 'white'
     filter_type: str = 'L2'  # low pass 4 pole
@@ -549,105 +615,98 @@ class ToneLayer(SynthLayer):
     dynamic_decay: int = 0
     bend: int = 0
     bend_time: int = 0
-    pitch: int = 60  # default middle c
+    # pitch: int = 60  # default middle c
 
     def __post_init__(self):
+        super().__post_init__()
         self.attack = 0
-
-    def choose_spectra(self):
-        self.spectra_options = {
+        self.wave_options = {
             "A1": self.gen_sine_wave,  # analog-style sine wave
             "A2": self.gen_tri_wave,  # analog-style triangle wave
             "A3": self.gen_saw_wave,  # analog-style triangle wave
             "A4": self.gen_square_wave,  # analog-style square wave
-            "A5": self.hp_square_wave,  # high pass filtered square wave
+            # "A5": self.hp_square_wave,  # high pass filtered square wave
             # 'A6':self.gen_pulse_wave, #analog-style pulse wave
+            "D1": self.drum_head_sound,
         }
+        self.layer_audio = self.wave_options.get(self.wave, 'A1')()
+        # self.duration = self.attack + self.decay
+        # self.attack_samples = int(np.ceil(self.attack * self.sample_rate))
+        # self.decay_samples = int(self.decay * self.sample_rate)
+        # self.num_samples = int(self.attack_samples + self.decay_samples)
 
-    def gen_simulated_drum_head_sound(self, Lx, Ly, Nx, Ny, T, dt, c, damping_coeff):
+    def drum_head_sound(self, delay_sec=0.01, feedback_gain=0.5):
         """
-        Simulate a 2D waveguide model for a drum head with damping using finite difference method.
+        Simulate a drum head with delay and feedback using waveguide synthesis.
 
-        Parameters:
-            Lx (float): Length of the drum head in the x-direction (meters).
-            Ly (float): Length of the drum head in the y-direction (meters).
-            Nx (int): Number of grid points in the x-direction.
-            Ny (int): Number of grid points in the y-direction.
-            T (float): Total simulation time (seconds).
-            dt (float): Time step size (seconds).
-            c (float): Wave speed (meters/second).
-            damping_coeff (float): Damping coefficient (0.0 for no damping, higher values for stronger damping).
+        Args:
+            duration_sec (float): Duration of the drum sound in seconds.
+            sample_rate_hz (int): Sampling rate in Hz (samples per second).
+            delay_sec (float): Delay time in seconds for the feedback loop.
+            feedback_gain (float): Feedback gain (0.0 to 1.0) for the delay loop.
 
         Returns:
-            ndarray: Displacement field of the drum head over time (shape: (num_steps, Ny, Nx)).
+            numpy.ndarray: Mono audio waveform as a NumPy array of floats.
         """
-        # Initialize grid
-        x = np.linspace(0, Lx, Nx)
-        y = np.linspace(0, Ly, Ny)
-        X, Y = np.meshgrid(x, y)
+        duration_sec = self.duration
+        sample_rate_hz = self.sample_rate
+        # Constants
+        c = 200.0  # Wave propagation speed (arbitrary value for demonstration)
+        dt = 1.0 / sample_rate_hz  # Time step (inverse of sample rate)
 
-        # Initialize displacement field
-        u = np.zeros((Ny, Nx))  # Current displacement field
-        u_prev = np.zeros_like(u)  # Previous displacement field
+        # Calculate number of samples
+        num_samples = int(duration_sec * sample_rate_hz)
 
-        # Function to apply boundary conditions (fixed edges)
-        def apply_boundary_conditions(u):
-            u[:, 0] = 0.0  # Left boundary (fixed)
-            u[:, -1] = 0.0  # Right boundary (fixed)
-            u[0, :] = 0.0  # Bottom boundary (fixed)
-            u[-1, :] = 0.0  # Top boundary (fixed)
+        # Initialize arrays
+        audio_data = np.zeros(num_samples)
+        delay_samples = int(delay_sec * sample_rate_hz)
+        delay_line = np.zeros(delay_samples)
 
         # Simulation loop
-        num_steps = int(T / dt)
-        displacement_history = []
+        for t in range(num_samples):
+            # Simulate wave propagation
+            if t > 0:
+                u_next = 2 * audio_data[t - 1] - audio_data[t - 2]
+            else:
+                u_next = 0.0  # Initial condition
 
-        for step in range(num_steps):
-            # Apply boundary conditions
-            apply_boundary_conditions(u)
+            # Apply delay and feedback
+            delayed_sample = delay_line[0]
+            output_sample = u_next + feedback_gain * delayed_sample
 
-            # Update displacement field using finite difference method (wave equation with damping)
-            u_next = (
-                2 * u
-                - u_prev
-                + (c**2 * dt**2)
-                * (
-                    np.roll(u, 1, axis=0)
-                    + np.roll(u, -1, axis=0)
-                    + np.roll(u, 1, axis=1)
-                    + np.roll(u, -1, axis=1)
-                    - 4 * u
-                )
-                - 2 * damping_coeff * dt * (u - u_prev)
-            )
+            # Store output sample
+            audio_data[t] = output_sample
 
-            # Store current displacement field
-            displacement_history.append(u.copy())
+            # Update delay line (circular buffer)
+            delay_line = np.roll(delay_line, 1)
+            delay_line[0] = u_next
 
-            # Update displacement fields for next time step
-            u_prev = u
-            u = u_next
+        # Normalize audio data
+        max_abs_value = np.max(np.abs(audio_data))
+        if max_abs_value > 0.0:
+            audio_data /= max_abs_value
 
-        # Convert displacement history to numpy array
-        displacement_history = np.array(displacement_history)
+        return audio_data
 
-        return displacement_history
+    def laplacian(self, u):
+        """
+        Compute discrete Laplacian (finite difference approximation).
 
-        # # Example usage:
-        # if __name__ == "__main__":
-        #     # Simulation parameters
-        #     Lx = 1.0  # Length of the drum head in the x-direction (meters)
-        #     Ly = 1.0  # Length of the drum head in the y-direction (meters)
-        #     Nx = 50  # Number of grid points in the x-direction
-        #     Ny = 50  # Number of grid points in the y-direction
-        #     T = 2.0  # Total simulation time (seconds)
-        #     dt = 0.0001  # Time step size (seconds)
-        #     c = 100.0  # Wave speed (meters/second)
-        #     damping_coeff = 0.05  # Damping coefficient (adjust to control decay, higher values for stronger damping)
+        Args:
+            u (numpy.ndarray): 2D grid representing wave displacement.
 
-        #     # Simulate drum head with damping
-        #     displacement_history = simulate_drum_head(
-        #         Lx, Ly, Nx, Ny, T, dt, c, damping_coeff
-        #     )
+        Returns:
+            numpy.ndarray: Laplacian of the input grid.
+        """
+        # Compute Laplacian using central difference method
+        laplacian_u = (
+            -4 * u
+            + np.roll(u, 1, axis=0)
+            + np.roll(u, -1, axis=0)
+            + np.roll(u, 1, axis=1)
+            + np.roll(u, -1, axis=1)
+        )
+        return laplacian_u
 
     def frequency_modulation(self, carrier_freq, modulation_type, mod_freq, mod_amount):
         """Generate a frequency-modulated signal (FM)."""
@@ -867,6 +926,217 @@ class GenericLayer(SynthLayer):
 
 # @dataclass
 # class LayerEffects:
+
+# def drum_head_sound(self, strike_position=0, head_size=.2):
+#     """
+#     Simulates a drum sound using waveguide synthesis.
+
+#     Args:
+#         pitch: The pitch of the drum in Hz.
+#         strike_position: A value between 0 and 1 representing the position of the strike
+#                         relative to the center of the drum head (0 = center, 1 = edge).
+#         head_size: The diameter of the drum head in meters.
+#         sample_rate: The desired sample rate of the audio in Hz (default: 44100).
+#         duration: The desired duration of the sound in seconds (default: 1).
+
+#     Returns:
+#         A NumPy array containing the audio waveform and the sample rate.
+#     """
+
+#     # Calculate wavelength based on pitch
+#     wavelength = self.sample_rate / self.frequency
+
+#     # Calculate delay based on strike position and head size
+#     delay_samples = int(strike_position * head_size * self.sample_rate / wavelength)
+
+#     # Initialize the audio buffer
+#     audio_buffer = np.zeros(self.num_samples)
+
+#     # Impulse at the strike position
+#     audio_buffer[delay_samples] = 1
+#     noise_duration = 0.01  # seconds
+#     noise_samples = int(noise_duration * self.sample_rate)
+#     noise = np.random.rand(noise_samples) - 0.5
+
+#     # Apply an envelope to the noise burst
+#     envelope = np.linspace(1, 0, noise_samples)  # Fade in and out
+
+#     # Apply noise to the audio buffer at the strike position
+#     audio_buffer[delay_samples:delay_samples + noise_samples] += noise * envelope
+
+#     # Two-tap waveguide filter coefficients
+#     a1 = -0.95
+#     a2 = 0.9
+
+#     # Apply waveguide filter
+#     for n in range(delay_samples + 1, self.num_samples):
+#         audio_buffer[n] = a1 * audio_buffer[n - 1] + a2 * audio_buffer[n - delay_samples - 1]
+
+#     # Normalize and scale audio
+#     audio_buffer = audio_buffer / np.max(np.abs(audio_buffer))
+#     audio_buffer *= 0.3
+
+#     return audio_buffer
+
+
+# def laplacian(self, u):
+#     """
+#     Compute discrete Laplacian (finite difference approximation).
+
+#     Args:
+#         u (numpy.ndarray): 2D grid representing wave displacement.
+
+#     Returns:
+#         numpy.ndarray: Laplacian of the input grid.
+#     """
+#     # Compute Laplacian using central difference method
+#     laplacian_u = (
+#         -4 * u
+#         + np.roll(u, 1, axis=0)
+#         + np.roll(u, -1, axis=0)
+#         + np.roll(u, 1, axis=1)
+#         + np.roll(u, -1, axis=1)
+#     )
+#     return laplacian_u
+
+# def simulate_drum_head(self):
+#     """
+#     Simulate a drum head using waveguide synthesis.
+
+#     Args:
+#         duration_sec (float): Duration of the drum sound in seconds.
+#         sample_rate_hz (int): Sampling rate in Hz (samples per second).
+
+#     Returns:
+#         numpy.ndarray: Mono audio waveform as a NumPy array of floats.
+#     """
+#     # Constants
+#     Lx = 40  # Grid size along x-axis
+#     Ly = 40  # Grid size along y-axis
+#     c = 200  # Wave propagation speed (arbitrary value for demonstration)
+#     dt = 1.0 / self.sample_rate  # Time step (inverse of sample rate)
+
+#     # Initialize grid and state variables
+#     u = np.zeros((Lx, Ly))  # Displacement grid
+#     u_prev = np.zeros((Lx, Ly))  # Previous time step
+
+#     # # Simulation parameters
+#     # duration_samples = int(self.duration * self.sample_rate)
+#     # num_frames = duration_samples  # Total frames to simulate
+
+#     # Simulation loop
+#     audio_data = []
+#     for frame in range(self.num_samples):
+#         # Update wave equation (finite difference method)
+#         # u_next = 2 * u - u_prev + (c ** 2) * self.laplacian(u)
+#         u_next = 2 * u - u_prev + (c ** 2) * self.laplacian(u) * (dt ** 2)
+
+#         # Boundary conditions (simple fixed boundary)
+#         u_next[:, 0] = 0  # Left boundary (clamp)
+#         u_next[:, -1] = 0  # Right boundary (clamp)
+#         u_next[0, :] = 0  # Top boundary (clamp)
+#         u_next[-1, :] = 0  # Bottom boundary (clamp)
+
+#         # Output from the center of the grid (simulated drum head)
+#         audio_data.append(u_next[Lx // 2, Ly // 2])
+
+#         # Update state for the next time step
+#         u_prev = u
+#         u = u_next
+
+#     # Normalize audio data and convert to NumPy array
+#     audio_data = np.array(audio_data)
+#     # / np.max(np.abs(audio_data))
+
+#     return audio_data
+
+# def gen_simulated_drum_head_sound(self, Lx=.5, Ly=.5, Nx=40, Ny=40, T=None, dt=.01, c=340., damping_coeff=.001):
+#     """
+#     Simulate a 2D waveguide model for a drum head with damping using finite difference method.
+
+#     Parameters:
+#         Lx (float): Length of the drum head in the x-direction (meters).
+#         Ly (float): Length of the drum head in the y-direction (meters).
+#         Nx (int): Number of grid points in the x-direction.
+#         Ny (int): Number of grid points in the y-direction.
+#         T (float): Total simulation time (seconds).
+#         dt (float): Time step size (seconds).
+#         c (float): Wave speed (meters/second).
+#         damping_coeff (float): Damping coefficient (0.0 for no damping, higher values for stronger damping).
+
+#     Returns:
+#         ndarray: Displacement field of the drum head over time (shape: (num_steps, Ny, Nx)).
+#     """
+#     if not T:
+#         T = self.duration
+#     # Initialize grid
+#     x = np.linspace(0, Lx, Nx)
+#     y = np.linspace(0, Ly, Ny)
+#     X, Y = np.meshgrid(x, y)
+
+#     # Initialize displacement field
+#     u = np.zeros((Ny, Nx))  # Current displacement field
+#     u_prev = np.zeros_like(u)  # Previous displacement field
+
+#     # Function to apply boundary conditions (fixed edges)
+#     def apply_boundary_conditions(u):
+#         u[:, 0] = 0.0  # Left boundary (fixed)
+#         u[:, -1] = 0.0  # Right boundary (fixed)
+#         u[0, :] = 0.0  # Bottom boundary (fixed)
+#         u[-1, :] = 0.0  # Top boundary (fixed)
+
+#     # Simulation loop
+#     num_steps = int(T / dt)
+#     displacement_history = []
+
+#     for step in range(num_steps):
+#         # Apply boundary conditions
+#         apply_boundary_conditions(u)
+
+#         # Update displacement field using finite difference method (wave equation with damping)
+#         u_next = (
+#             2 * u
+#             - u_prev
+#             + (c**2 * dt**2)
+#             * (
+#                 np.roll(u, 1, axis=0)
+#                 + np.roll(u, -1, axis=0)
+#                 + np.roll(u, 1, axis=1)
+#                 + np.roll(u, -1, axis=1)
+#                 - 4 * u
+#             )
+#             - 2 * damping_coeff * dt * (u - u_prev)
+#         )
+
+#         # Store current displacement field
+#         displacement_history.append(u.copy())
+
+#         # Update displacement fields for next time step
+#         u_prev = u
+#         u = u_next
+
+#     # Convert displacement history to numpy array
+#     displacement_history = np.array(displacement_history)
+
+#     return displacement_history
+
+# # Example usage:
+# if __name__ == "__main__":
+#     # Simulation parameters
+#     Lx = 1.0  # Length of the drum head in the x-direction (meters)
+#     Ly = 1.0  # Length of the drum head in the y-direction (meters)
+#     Nx = 50  # Number of grid points in the x-direction
+#     Ny = 50  # Number of grid points in the y-direction
+#     T = 2.0  # Total simulation time (seconds)
+#     dt = 0.0001  # Time step size (seconds)
+#     c = 100.0  # Wave speed (meters/second)
+#     damping_coeff = 0.05  # Damping coefficient (adjust to control decay, higher values for stronger damping)
+
+#     # Simulate drum head with damping
+#     displacement_history = simulate_drum_head(
+#         Lx, Ly, Nx, Ny, T, dt, c, damping_coeff
+#     )
+
 
 #     def apply_dynamic_bandpass_filter(self):
 #         """Apply a dynamic bandpass filter with variable cutoff frequency and resonance (Q-factor)."""
