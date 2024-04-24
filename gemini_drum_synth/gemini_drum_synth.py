@@ -24,7 +24,7 @@ from pedalboard import (
 
 # Sampling parameters
 @dataclass
-class Sound:
+class SoundChannel:
     sample_rate: int = 44100  # Sample rate (Hz)
     output_file_bitdepth: int = 16
     velocity: int = 90  # intensity of drum hit
@@ -140,7 +140,19 @@ class SynthLayer(Layer):
         else:
             return np.linspace(0, 1, self.num_samples, endpoint=False)
 
-    ####WAVE#OSCILLATORS####
+    ####HELPER_FUNCTIONS####
+    def filter_translate(self, filter_type="L2"):
+        filter_translate = {
+            'L1': LadderFilter.LPF12,
+            'L2': LadderFilter.LPF24,
+            'H1': LadderFilter.HPF12,
+            'H2': LadderFilter.HPF24,
+            'B1': LadderFilter.BPF12,
+            'B2': LadderFilter.BPF24,
+        }
+        return filter_translate.get(filter_type.upper())
+
+    ####WAVE_OSCILLATORS####
 
     def gen_sine_wave(self, pitch_override=0):
         """
@@ -207,7 +219,7 @@ class SynthLayer(Layer):
         square_wave = np.sign(np.sin(2 * np.pi * pitch_override * t))
         return square_wave
 
-    ####CLICK#SOUND#GENERATORS####
+    ####CLICK_SOUND_GENERATORS####
 
     def gen_click(self, click_type, click_duration):
         """
@@ -270,7 +282,7 @@ class SynthLayer(Layer):
         if self.pitch:
             self.layer_audio = self.pitch_change_semitones(self.layer_audio, self.pitch)
 
-    ####PHYSICAL#MODELLING#OSCILLATORS####
+    ####PHYSICAL_MODELLING_OSCILLATORS####
 
     def karplus_strong(self):
         """
@@ -302,7 +314,7 @@ class SynthLayer(Layer):
         #         ))
         return self.layer_audio
 
-    ####NOISE#GENERATORS####
+    ####NOISE_GENERATORS####
 
     def gen_white_noise(self):
         """
@@ -386,7 +398,7 @@ class SynthLayer(Layer):
 
         return blue_noise
 
-    ####ENVELOPE#COMPONENT#GENERATORS####
+    ####ENVELOPE_COMPONENT_GENERATORS####
 
     def gen_log_decay(self, degree=50):
         """Generate a logarithmic decay."""
@@ -410,7 +422,7 @@ class SynthLayer(Layer):
         """Generate a linear decay."""
         return np.linspace(1, 0, self.decay_samples)
 
-    ####ENVELOPE#GENERATORS####
+    ####ENVELOPE_GENERATORS####
 
     def gen_click_env(self):
         return np.exp(-5 * self.get_t())
@@ -460,7 +472,114 @@ class SynthLayer(Layer):
         # TODO
         return self.gen_log_decay()
 
-    ####MODULATION#FUNCTIONS####
+    ####FILTERS####
+
+    def apply_filter(
+        self, audio_signal, filter_type='L2', cutoff_hz=440.0, resonance=0, drive=1
+    ):
+        """
+        Applies filter to audio signal
+
+        Parameters:
+            audio_signal (numpy.array): a numpy array representing an audio signal
+            filter_type (str) default = L2: type of filter comprised of a 2 character code L2 = 24db per octave low-pass,
+                character 1: l = low pass, h = high pass, b = bandpass
+                character 2: 1 = 12db per octave, 2 = 24db per octave
+            cutoff_hz (int) default = 100: Size of steps for filter to process in samples; should be at least double cutoff , filter_type = 'L2', cutoff_hz = 440., resonance = 0, drive = 1
+            duration (float): Duration of the noise signal in seconds.
+            sample_rate (int): Sampling rate of the noise signal (samples per second).
+
+        Returns:
+            no return, applies filter to self.layer_audio.
+        """
+        board = Pedalboard([LadderFilter()])[0]
+        board.mode = self.filter_translate(filter_type)
+        board.cutoff_hz = cutoff_hz
+        board.drive = drive
+        board.resonance = resonance
+        return board.process(
+            input_array=audio_signal,
+            sample_rate=self.sample_rate,
+            reset=False,
+        )
+
+    def apply_filter_to_layer(
+        self, filter_type='L2', cutoff_hz=440.0, resonance=0, drive=1
+    ):
+        """
+        Applies filter to layer audio
+
+        Parameters:
+            filter_type (str) default = L2: type of filter comprised of a 2 character code L2 = 24db per octave low-pass,
+                character 1: l = low pass, h = high pass, b = bandpass
+                character 2: 1 = 12db per octave, 2 = 24db per octave
+            cutoff_hz (int) default = 100: Size of steps for filter to process in samples; should be at least double cutoff , filter_type = 'L2', cutoff_hz = 440., resonance = 0, drive = 1
+            duration (float): Duration of the noise signal in seconds.
+            sample_rate (int): Sampling rate of the noise signal (samples per second).
+
+        Returns:
+            no return, applies filter to self.layer_audio.
+        """
+        self.layer_audio = self.apply_filter(
+            audio_signal=self.layer_audio,
+            filter_type=filter_type,
+            cutoff_hz=cutoff_hz,
+            resonance=resonance,
+            drive=drive,
+        )
+
+    def apply_dynamic_filter(
+        self, step_size=100, filter_type='L2', cutoff_hz=440.0, resonance=0, drive=1
+    ):
+        """
+        Applies filters with modulated parameters over the length of the signal
+        """
+        board = Pedalboard([LadderFilter()])[0]
+        step_size = (self.sample_rate // cutoff_hz) * 2
+        if self.dynamic_filter:
+            # FOR DYNAMIC FILTER
+            # TODO CREATE CURVE AND ADAPT IT TO THE WEIRD LOW_PASS NEGATIVE HIGH PASS POSTIVE LOGIC. TEST WITH SOUNDS
+            if self.dynamic_filter > 0:
+                self.filter_env = (
+                    self.gen_log_decay(degree=self.dynamic_filter * 10)
+                    * self.freq
+                    * 0.05
+                    * self.dynamic_filter
+                ) + self.freq
+            else:
+                self.filter_env = self.freq - (
+                    self.gen_log_decay(degree=self.dynamic_filter * -10)
+                    * self.freq
+                    * 0.05
+                    * -self.dynamic_filter
+                )
+            output = []
+
+            for i in range(0, self.num_samples - 1, step_size):
+                board.mode = self.filter_translate(filter_type)
+                board.cutoff_hz = cutoff_hz
+                board.drive = drive
+                board.resonance = resonance
+                #     chunk = af.read(step_size)
+                # if self.filter_type.startswith('L'):
+                #     board.cutoff_hz = self.freq
+                if isinstance(cutoff_hz, list):
+                    board.cutoff_hz = self.filter_env[i]
+                # print(board.cutoff_hz)
+                output.append(
+                    board.process(
+                        input_array=self.layer_audio[i : i + step_size],
+                        sample_rate=self.sample_rate,
+                        reset=False,
+                    )
+                )
+            self.layer_audio = np.concatenate(output, axis=0)
+        else:
+            self.layer_audio = board.process(
+                input_array=self.layer_audio, sample_rate=self.sample_rate
+            )
+
+    ####MODULATION_FUNCTIONS####
 
     def modulate_amplitude(self):
         """Generate an amplitude-modulated signal (AM) using a modulation envelope."""
@@ -471,9 +590,8 @@ class SynthLayer(Layer):
 
 @dataclass
 class ND_ClickLayer(SynthLayer):
-    """
-    sends, etc.
-    Creates transient sounds alliveiating the need for frequency modulation to achieve this affect
+    """Creates transient click sounds for various percussion types
+    TODO FX sends.
     """
 
     click_type: str = 'N1'
@@ -604,7 +722,8 @@ class ND_NoiseLayer(SynthLayer):
 
 
 @dataclass
-class ToneLayer(SynthLayer):
+class ND_ToneLayer(SynthLayer):
+    """INCOMPLETE NEED MANY TYPES OF SOUND GENERATION STILL"""
 
     wave: str = "A1"  # default sine wave
     second: int = 50  # second parameter, spectra if applicable
@@ -740,7 +859,7 @@ class ToneLayer(SynthLayer):
 
 
 @dataclass
-class GenericLayer(SynthLayer):
+class VD_GenericLayer(SynthLayer):
     """
     Generate a drum sound using basic synthesis.
 
@@ -763,6 +882,7 @@ class GenericLayer(SynthLayer):
     src_type: str = "square"
     mod_type: str = "exp"
     env_type: str = "linear"
+    noise_type: str = "white"
     frequency: int = 440
     detune: int = 10
     mod_amount: float = 1.0
@@ -770,6 +890,7 @@ class GenericLayer(SynthLayer):
     dynamic_filter: float = 0
 
     def __post_init__(self):
+        super().__post_init__()
         self.duration = self.attack + self.decay
         self.num_samples = int(self.duration * self.sample_rate)
         self.noise_types = {
