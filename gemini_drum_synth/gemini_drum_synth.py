@@ -25,13 +25,27 @@ from pedalboard import (
 # Sampling parameters
 @dataclass
 class SoundChannel:
-    sample_rate: int = 44100  # Sample rate (Hz)
-    output_file_bitdepth: int = 16
+    # ADMIN SETTINGS
+    channel_filepath: Path = Path.home() / "drumsynth/samples"
+
+    # AUDIO SETTINGS
+    channel_sample_rate: int = 44100  # Sample rate (Hz)
+    channel_bitdepth: int = 16
+
+    # CHANNEL SETTINGS
     velocity: int = 90  # intensity of drum hit
     pan: int = 0
     level: float = 0.5
 
-    def save_audio(self, filename):
+    # FX SETTINGS
+    wave_guide_send: int = 0
+    distortion_send: int = 0
+    reverb_send: int = 0
+    delay_send: int = 0
+    fx_bus_1_send: int = 0
+    fx_bus_2_send: int = 0
+
+    def save_channel_audio(self, filename):
         """
         Save the audio signal to a WAV file.
 
@@ -47,19 +61,81 @@ class SoundChannel:
 
 
 @dataclass
-class Layer:
+class SynthLayer:
+    # ADMIN SETTINGS
+    layer_audio: np.array = np.zeros(1)
+    filepath: Path = Path.home() / "drumsynth/samples"
+
+    # AUDIO SETTINGS
     num_channels = 1
     bit_depth: int = 16
     sample_rate: int = 44100
-    level: float = 0.5
-    wave_guide_send: int = 0
-    distortion_send: int = 0
-    fx_bus_1_send: int = 0
-    fx_bus_2_send: int = 0
-    reverb_send: int = 0
-    delay_send: int = 0
-    filepath: Path = Path.home() / "drumsynth/samples"
-    layer_audio: np.array = np.zeros(1)
+
+    # LAYER SETTINGS
+    layer_level: float = 0.5
+    pitch: int = 60  # adjust pitch of sound in semitones 60 = 256hz, 69 = 440hz
+    attack: float = 0.000001  # Duration of the attack of synthesized sound (seconds) to avoid divide by zero errors
+    decay: float = 2.0  # Duration of the decay synthesized sound (seconds)
+
+    def __post_init__(self):
+        self.level_wrap_around()
+        self.attack = self.attack if self.attack else 0.00001
+        self.attack_samples = int(np.floor(self.attack * self.sample_rate))
+        self.decay_samples = int(np.floor(self.decay * self.sample_rate))
+        # self.duration = self.attack + self.decay
+        self.num_samples = int(self.attack_samples + self.decay_samples)
+        self.att_t = self.gen_t(num_samples=self.attack_samples)
+        self.dec_t = self.gen_t(num_samples=self.decay_samples)
+        self.env_t = self.gen_t(num_samples=self.num_samples)
+        self.frequency = 2 ** ((self.pitch - 69) / 12) * 440
+
+    ####OUTPUT_METHODS####
+    def apply_level(self):
+        self.layer_audio *= self.layer_level
+
+    def save_layer(self, filename):
+        """
+        Save the audio signal to a WAV file.
+
+        Parameters:
+        - audio: numpy array containing the audio signal
+        - filename: name of the output WAV file
+        """
+
+        # Scale audio to 16-bit integer range (-32768 to 32767)
+        audio_int = (self.layer_audio * 32767).astype(np.int16)
+
+        # Save the audio to a WAV file
+        wavfile.write(self.filepath / f"{filename}.wav", self.sample_rate, audio_int)
+
+    ####HELPER_FUNCTIONS####
+
+    def wrap_around(self, setting):
+        """Keeps settings between 0-1 by finding absolute value and applying modulo 1"""
+        return np.abs(setting) % 1
+
+    def level_wrap_around(self):
+        self.layer_level = self.wrap_around(self.layer_level)
+
+    def gen_t(self, num_samples=441):
+        """
+        Creates time domain array for envelope generators
+        """
+        return np.linspace(0, 1, num_samples, endpoint=True)
+
+    def filter_translate(self, filter_type="L2"):
+        """
+        Translates filter type values to uncalled filter methods that can be called with settings locally.
+        """
+        filter_translate = {
+            'L1': LadderFilter.LPF12,
+            'L2': LadderFilter.LPF24,
+            'H1': LadderFilter.HPF12,
+            'H2': LadderFilter.HPF24,
+            'B1': LadderFilter.BPF12,
+            'B2': LadderFilter.BPF24,
+        }
+        return filter_translate.get(filter_type.upper())
 
     def pitch_change_semitones(self, audio_signal, semitones):
         """
@@ -86,74 +162,15 @@ class Layer:
 
         return resampled_signal
 
-    # def play_audio(audio):
-    #     """Play the audio signal using sounddevice."""
-    #     sd.play(audio, samplerate=sample_rate)
-    #     sd.wait()
+    ####NORMALIZATION_METHODS####
 
     def normalize_audio(self, audio):
-        """Normalize audio signal to between -1 and 1"""
+        """
+        Normalize audio signal to between -1 and 1.
+        *low divide by zero risk
+        """
         audio /= np.max(np.abs(audio))
         return audio
-
-    def save_layer(self, filename):
-        """
-        Save the audio signal to a WAV file.
-
-        Parameters:
-        - audio: numpy array containing the audio signal
-        - filename: name of the output WAV file
-        """
-        # Scale audio to 16-bit integer range (-32768 to 32767)
-        audio_int = (self.layer_audio * 32767).astype(np.int16)
-
-        # Save the audio to a WAV file
-        wavfile.write(self.filepath / f"{filename}.wav", self.sample_rate, audio_int)
-
-
-@dataclass
-class SynthLayer(Layer):
-    pitch: int = 60  # adjust pitch of sound in semitones 60 = 256hz, 69 = 440hz
-    attack: float = 0.000001  # Duration of the attack of synthesized sound (seconds) to avoid divide by zero errors
-    decay: float = 2.0  # Duration of the decay synthesized sound (seconds)
-
-    def __post_init__(self):
-        self.level_wrap_around()
-        self.attack = self.attack if self.attack else 0.00001
-        self.attack_samples = int(np.floor(self.attack * self.sample_rate))
-        self.decay_samples = int(np.floor(self.decay * self.sample_rate))
-        # self.duration = self.attack + self.decay
-        self.num_samples = int(self.attack_samples + self.decay_samples)
-        self.att_t = self.gen_t(num_samples=self.attack_samples)
-        self.dec_t = self.gen_t(num_samples=self.decay_samples)
-        self.env_t = self.gen_t(num_samples=self.num_samples)
-        # self.env_t = np.linspace(0, 1, self.num_samples)
-        # self.att_t = np.linspace(0, 1, self.attack_samples)
-        # self.dec_t = np.linspace(0, 1, self.decay_samples)
-        self.frequency = 2 ** ((self.pitch - 69) / 12) * 440
-
-    ####HELPER_FUNCTIONS####
-    def level_wrap_around(self):
-        self.level %= 1
-
-    def gen_t(self, num_samples=441):
-        """
-        Creates time domain array for envelope generators
-        """
-        return np.linspace(0, 1, num_samples, endpoint=True)
-
-    def filter_translate(self, filter_type="L2"):
-        filter_translate = {
-            'L1': LadderFilter.LPF12,
-            'L2': LadderFilter.LPF24,
-            'H1': LadderFilter.HPF12,
-            'H2': LadderFilter.HPF24,
-            'B1': LadderFilter.BPF12,
-            'B2': LadderFilter.BPF24,
-        }
-        return filter_translate.get(filter_type.upper())
-
-    ####NORMALIZATION_METHODS####
 
     def min_max_normalization(self, signal):
         return (signal - np.min(signal)) / (np.max(signal) - np.min(signal))
@@ -643,6 +660,11 @@ class SynthLayer(Layer):
             np.sin(carrier_signal + modulation_signal)
         )
 
+    ####FX_SENDS####
+
+    def apply_wave_guide(self, audio_signal, wave_guide_send, decay, body, tone):
+        return audio_signal
+
 
 @dataclass
 class ND_ClickLayer(SynthLayer):
@@ -658,7 +680,6 @@ class ND_ClickLayer(SynthLayer):
         super().__post_init__()
         # self.gen_click(click_type=self.click_type, click_duration=self.click_duration)
         self.gen_click(click_type=self.click_type)
-        self.layer_audio *= self.level
 
 
 @dataclass
@@ -807,6 +828,7 @@ class ND_ToneLayer(SynthLayer):
     dynamic_decay: int = 0
     bend: int = 0
     bend_time: int = 0
+
     # pitch: int = 60  # default middle c
 
     def __post_init__(self):
@@ -943,13 +965,14 @@ class VD_GenericLayer(SynthLayer):
     env_type: str = "lin"
     noise_type: str = "white"
     frequency: int = 440
-    mod_amount: float = 1.0
+    mod_amount: float = 1.0  # BETWEEN 0-1
     mod_rate: int = 220
-    # detune: int = 10
-    # dynamic_filter: float = 0
+    wave_guide_send: float = 0  # BETWEEN 0-1
 
     def __post_init__(self):
         super().__post_init__()
+        self.wave_guide_send = self.wrap_around(self.wave_guide_send)
+        self.mod_amount = self.wrap_around(self.mod_amount)
         # self.duration = self.attack + self.decay
         # self.num_samples = int(self.duration * self.sample_rate)
         self.osc_func = {
@@ -989,7 +1012,7 @@ class VD_GenericLayer(SynthLayer):
             'sine': self.gen_sine_wave,
             'noise': self.gen_white_noise,
         }
-        self.modulation_signal = mod_translate.get(self.mod_type)()
+        self.modulation_signal = mod_translate.get(self.mod_type)() * self.mod_amount
 
     def gen_carrier_signal(self):
         """Generate carrier signal that will be used as basis for drum sounds"""
@@ -1016,7 +1039,7 @@ class VD_GenericLayer(SynthLayer):
             "pink": self.gen_pink_noise,
             "blue": self.gen_blue_noise,
         }
-        noise_signal = self.noise_types.get(noise_type)
+        noise_signal = self.noise_types.get(noise_type)()
         return self.apply_filter(
             audio_signal=noise_signal, cutoff_hz=cutoff_hz, filter_type=filter_type
         )
