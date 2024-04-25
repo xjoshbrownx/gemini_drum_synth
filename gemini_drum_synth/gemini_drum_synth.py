@@ -120,13 +120,13 @@ class SynthLayer(Layer):
     def __post_init__(self):
         self.level_wrap_around()
         self.attack = self.attack if self.attack else 0.00001
-        self.duration = self.attack + self.decay
         self.attack_samples = int(np.floor(self.attack * self.sample_rate))
-        self.decay_samples = int(self.decay * self.sample_rate)
+        self.decay_samples = int(np.floor(self.decay * self.sample_rate))
+        # self.duration = self.attack + self.decay
         self.num_samples = int(self.attack_samples + self.decay_samples)
-        self.env_t = self.get_t(num_samples=self.num_samples)
-        self.att_t = self.get_t(num_samples=self.attack_samples)
-        self.dec_t = self.get_t(num_samples=self.decay_samples)
+        self.att_t = self.gen_t(num_samples=self.attack_samples)
+        self.dec_t = self.gen_t(num_samples=self.decay_samples)
+        self.env_t = self.gen_t(num_samples=self.num_samples)
         # self.env_t = np.linspace(0, 1, self.num_samples)
         # self.att_t = np.linspace(0, 1, self.attack_samples)
         # self.dec_t = np.linspace(0, 1, self.decay_samples)
@@ -136,18 +136,11 @@ class SynthLayer(Layer):
     def level_wrap_around(self):
         self.level %= 1
 
-    def get_t(self, num_samples=441):
+    def gen_t(self, num_samples=441):
         """
-        Creates t value for envelope generators
-        TODO FIX BUGGY CONDITIONAL LOGIC
+        Creates time domain array for envelope generators
         """
-        return np.linspace(0, 1, num_samples, endpoint=False)
-        # if num_samples:
-        # return np.linspace(0, 1, num_samples, endpoint=False)
-        # elif self.num_click_samples:
-        #     return np.linspace(0, 1, self.num_click_samples, endpoint=False)
-        # else:
-        #     return np.linspace(0, 1, self.num_samples, endpoint=False)
+        return np.linspace(0, 1, num_samples, endpoint=True)
 
     def filter_translate(self, filter_type="L2"):
         filter_translate = {
@@ -160,6 +153,8 @@ class SynthLayer(Layer):
         }
         return filter_translate.get(filter_type.upper())
 
+    ####NORMALIZATION_METHODS####
+
     def min_max_normalization(self, signal):
         return (signal - np.min(signal)) / (np.max(signal) - np.min(signal))
 
@@ -168,75 +163,79 @@ class SynthLayer(Layer):
 
     ####WAVE_OSCILLATORS####
 
-    def gen_sine_wave(self, pitch_override=0):
+    def gen_sine_wave(self, freq_override=0):
         """
         Generate Sine Wave
         """
 
-        if not pitch_override:
-            pitch_override = self.frequency
-        t = np.linspace(0, self.duration, self.num_samples, endpoint=False)
-        sine_wave = np.sin(2 * np.pi * pitch_override * t)
+        if not freq_override:
+            freq_override = self.frequency
+        # t = np.linspace(0, self.duration, self.num_samples, endpoint=False)
+        sine_wave = np.sin(2 * np.pi * freq_override * self.env_t)
         sine_wave /= np.max(np.abs(sine_wave))
         return sine_wave
 
-    def gen_tri_wave(self, pitch_override=0):
+    def gen_tri_wave(self, freq_override=0):
         """
         Generate a triangle wave audio signal.
 
         Parameters:
-            pitch_override (int): allow function to work with frequences that are not stored in the self.frequency property.
+            freq_override (int): allow function to work with frequences that are not stored in the self.frequency property.
 
         Returns:
             ndarray: Generated triangle wave audio signal.
         """
-        if not pitch_override:
-            pitch_override = self.frequency
-        t = np.linspace(
-            0, self.duration, self.num_samples, endpoint=False
-        )  # Time array
+        if not freq_override:
+            freq_override = self.frequency
+        # t = np.linspace(
+        #     0, self.duration, self.num_samples, endpoint=False
+        # )  # Time array
 
         # Calculate angular frequency in radians
-        angular_freq = 2 * np.pi * pitch_override
+        angular_freq = 2 * np.pi * freq_override
 
         # Generate triangle wave using modulo operation
-        triangle_wave = 2 * np.abs((t * angular_freq / (2 * np.pi) % 1) - 0.5) - 1
+        triangle_wave = (
+            2 * np.abs((self.env_t * angular_freq / (2 * np.pi) % 1) - 0.5) - 1
+        )
 
         return triangle_wave
 
-    def gen_saw_wave(self, pitch_override=0):
+    def gen_saw_wave(self, freq_override=0):
         """Generate Saw Wave"""
-        if not pitch_override:
-            pitch_override = self.frequency
-        t = np.linspace(0, self.duration, self.num_samples, endpoint=False)
-        sawtooth_wave = 2 * (pitch_override * t - np.floor(self.frequency * t + 0.5))
+        if not freq_override:
+            freq_override = self.frequency
+        # t = np.linspace(0, self.duration, self.num_samples, endpoint=False)
+        sawtooth_wave = 2 * (
+            freq_override * self.env_t - np.floor(self.frequency * self.env_t + 0.5)
+        )
         sawtooth_wave /= np.max(np.abs(sawtooth_wave))
         return sawtooth_wave
 
-    def gen_rev_saw_wave(self, pitch_override=0):
+    def gen_rev_saw_wave(self, freq_override=0):
         """Generate reverse saw wave"""
 
-        rev_saw_wave = self.gen_saw_wave(pitch_override) * -1
+        rev_saw_wave = self.gen_saw_wave(freq_override) * -1
 
-    def gen_square_wave(self, pitch_override=0):
+    def gen_square_wave(self, freq_override=0):
         """Generate Sine Wave
 
         Parameters:
-            pitch_override (int): allow function to work with frequences that are not stored in the self.frequency property.
+            freq_override (int): allow function to work with frequences that are not stored in the self.frequency property.
 
         Returns:
             ndarray: Generated triangle wave audio signal.
         """
 
-        if not pitch_override:
-            pitch_override = self.frequency
-        t = np.linspace(0, self.duration, self.num_samples, endpoint=False)
-        square_wave = np.sign(np.sin(2 * np.pi * pitch_override * t))
+        if not freq_override:
+            freq_override = self.frequency
+        # t = np.linspace(0, self.duration, self.num_samples, endpoint=False)
+        square_wave = np.sign(np.sin(2 * np.pi * freq_override * self.env_t))
         return square_wave
 
     ####CLICK_SOUND_GENERATORS####
 
-    def gen_click(self, click_type, click_duration):
+    def gen_click(self, click_type):
         """
         Generate a click sound waveform of the specified type.
 
@@ -248,7 +247,7 @@ class SynthLayer(Layer):
         Returns:
             ndarray: NumPy array containing the generated click sound waveform.
         """
-        self.num_click_samples = int(click_duration * self.sample_rate)
+        self.num_click_samples = int(self.attack_samples)
 
         # Exponential decay envelope
         # print(num_click_samples)
@@ -256,7 +255,7 @@ class SynthLayer(Layer):
         if click_type == 'S1':
             # Generate a simple click (cosine wave envelope)
             self.layer_audio = (
-                np.cos(2 * np.pi * 1000 * self.get_t()) * self.gen_click_env()
+                np.cos(2 * np.pi * 1000 * self.att_t) * self.gen_click_env()
             )
 
         elif click_type == 'N1':
@@ -345,8 +344,8 @@ class SynthLayer(Layer):
         Generate white noise audio signal.
 
         Parameters:
-            duration (float): Duration of the noise signal in seconds.
-            sample_rate (int): Sampling rate of the noise signal (samples per second).
+            # duration (float): Duration of the noise signal in seconds.
+            # sample_rate (int): Sampling rate of the noise signal (samples per second).
 
         Returns:
             ndarray: Generated white noise audio signal.
@@ -424,49 +423,60 @@ class SynthLayer(Layer):
 
     ####ENVELOPE_COMPONENT_GENERATORS####
 
-    def gen_log_decay(self, degree=50):
+    def gen_log_decay(self, degree=50, decay_samples=0):
         """Generate a logarithmic decay."""
         base = 0.95**degree
-        log_decay = np.flip(np.logspace(1, 0, self.decay_samples, base=base))
+        if not decay_samples:
+            decay_samples = self.decay_samples
+        log_decay = np.flip(np.logspace(1, 0, decay_samples, base=base))
         # return (log_decay - np.min(log_decay)) / (np.max(log_decay) - np.min(log_decay))
         return (
+            # terany statement rewritten as multiline by black
             self.min_max_normalization(log_decay)
             if self.decay_samples
             else np.zeros(self.decay_samples)
         )
 
-    def gen_log_attack(self, degree=50):
+    def gen_log_attack(self, degree=50, attack_samples=0):
         """Generate a logarithmic attack."""
         base = 0.95**degree
-        log_attack = np.flip(np.logspace(0, 1, self.attack_samples, base=base))
-        # # return (log_attack - np.min(log_attack)) / (
-        # #     np.max(log_attack) - np.min(log_attack)
-        # )
+        if not attack_samples:
+            attack_samples = self.attack_samples
+        log_attack = np.flip(np.logspace(0, 1, attack_samples, base=base))
         return (
+            # terany statement rewritten as multiline by black
             self.min_max_normalization(log_attack)
             if self.attack_samples
             else np.zeros(self.attack_samples)
         )
 
-    def gen_lin_attack(self):
+    def gen_lin_attack(self, attack_samples=0):
         """Generate a linear attack."""
-        return np.linspace(0, 1, self.attack_samples)
+        if not attack_samples:
+            attack_samples = self.attack_samples
+        return np.linspace(0, 1, attack_samples)
 
-    def gen_lin_decay(self):
+    def gen_lin_decay(self, decay_samples=0):
         """Generate a linear decay."""
-        return np.linspace(1, 0, self.decay_samples)
+        if not decay_samples:
+            decay_samples = self.decay_samples
+        return np.linspace(1, 0, decay_samples)
 
     ####ENVELOPE_GENERATORS####
 
-    def gen_click_env(self, num_samples=441):
-        return np.exp(-5 * self.get_t(num_samples=num_samples))
+    def gen_click_env(self):
+        return np.exp(-5 * self.att_t)
 
     def gen_lin_att_lin_dec_env(self):
         return self.gen_lin_env()
 
+    def gen_log_dec_no_att_env(self):
+        """Generates an envelop with no attack and a log decay for duration."""
+        return self.gen_log_decay(decay_samples=self.num_samples)
+
     def gen_lin_att_log_dec_env(self, degree=50):
         """Generate a linear attack / logrithmic decay envelope."""
-        rise = self.gen_lin_attack()
+        rise = self.gen_lin_attack(degree=degree)
         fall = self.gen_log_decay(degree=degree)
         envelope = np.concatenate([rise, fall])
         self.num_samples = rise.shape[0] + fall.shape[0]
@@ -644,9 +654,10 @@ class ND_ClickLayer(SynthLayer):
     click_duration: float = 0.1
 
     def __post_init__(self):
+        self.attack = 0.01
         super().__post_init__()
-        self.attack = 0
-        self.gen_click(click_type=self.click_type, click_duration=self.click_duration)
+        # self.gen_click(click_type=self.click_type, click_duration=self.click_duration)
+        self.gen_click(click_type=self.click_type)
         self.layer_audio *= self.level
 
 
@@ -664,8 +675,8 @@ class ND_NoiseLayer(SynthLayer):
     # drive: float = 1.0
 
     def __post_init__(self):
-        super().__post_init__()
         self.attack = 0
+        super().__post_init__()
         # print('does this print')
         # print(self.num_samples)
         # self.duration = self.attack + self.decay
@@ -939,14 +950,8 @@ class VD_GenericLayer(SynthLayer):
 
     def __post_init__(self):
         super().__post_init__()
-        self.duration = self.attack + self.decay
-        self.num_samples = int(self.duration * self.sample_rate)
-        self.noise_types = {
-            "white": self.gen_white_noise,
-            "brown": self.gen_brown_noise,
-            "pink": self.gen_pink_noise,
-            "blue": self.gen_blue_noise,
-        }
+        # self.duration = self.attack + self.decay
+        # self.num_samples = int(self.duration * self.sample_rate)
         self.osc_func = {
             "sine": self.gen_sine_wave,
             "saw": self.gen_saw_wave,
@@ -980,7 +985,7 @@ class VD_GenericLayer(SynthLayer):
         Create mod signal
         """
         mod_translate = {
-            'exp': self.gen_log_decay,
+            'exp': self.gen_log_dec_no_att_env,
             'sine': self.gen_sine_wave,
             'noise': self.gen_white_noise,
         }
@@ -988,7 +993,7 @@ class VD_GenericLayer(SynthLayer):
 
     def gen_carrier_signal(self):
         """Generate carrier signal that will be used as basis for drum sounds"""
-        self.carrier_signal = self.osc_func[self.src_type]()
+        self.carrier_signal = self.osc_func.get(self.src_type)()
 
     def gen_envelope(self):
         envelopes = {
@@ -1005,6 +1010,12 @@ class VD_GenericLayer(SynthLayer):
         )
 
     def gen_filtered_noise(self, cutoff_hz, noise_type='white', filter_type='L2'):
+        self.noise_types = {
+            "white": self.gen_white_noise,
+            "brown": self.gen_brown_noise,
+            "pink": self.gen_pink_noise,
+            "blue": self.gen_blue_noise,
+        }
         noise_signal = self.noise_types.get(noise_type)
         return self.apply_filter(
             audio_signal=noise_signal, cutoff_hz=cutoff_hz, filter_type=filter_type
@@ -1963,7 +1974,7 @@ class VD_GenericLayer(SynthLayer):
 #         return output_signal
 
 # class ProbablyDupes:
-#         def gen_sine_wave(self, pitch_override=0):
+#         def gen_sine_wave(self, freq_override=0):
 #         """Generate Sine Wave"""
 #         if not pitch_override:
 #             pitch_override = self.frequency
