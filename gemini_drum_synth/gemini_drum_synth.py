@@ -112,7 +112,10 @@ class SynthLayer:
 
     def wrap_around(self, setting):
         """Keeps settings between 0-1 by finding absolute value and applying modulo 1"""
-        return np.abs(setting) % 1
+        if setting > 1:
+            return abs(setting) % 1.0
+        else:
+            return setting
 
     def level_wrap_around(self):
         self.layer_level = self.wrap_around(self.layer_level)
@@ -662,8 +665,71 @@ class SynthLayer:
 
     ####FX_SENDS####
 
-    def apply_wave_guide(self, audio_signal, wave_guide_send, decay, body, tone):
-        return audio_signal
+    def apply_pedal_fx(self, **kwargs):
+        """
+        Applies filter to audio signal
+
+        Parameters:
+            audio_signal (numpy.array): a numpy array representing an audio signal
+            filter_type (str) default = L2: type of filter comprised of a 2 character code L2 = 24db per octave low-pass,
+                character 1: l = low pass, h = high pass, b = bandpass
+                character 2: 1 = 12db per octave, 2 = 24db per octave
+            cutoff_hz (int) default = 100: Size of steps for filter to process in samples; should be at least double cutoff , filter_type = 'L2', cutoff_hz = 440., resonance = 0, drive = 1
+            duration (float): Duration of the noise signal in seconds.
+            sample_rate (int): Sampling rate of the noise signal (samples per second).
+
+        Returns:
+            no return, applies filter to self.layer_audio.
+        """
+        # board = Pedalboard([LadderFilter()])[0]
+        # board.mode = self.filter_translate(filter_type)
+        # board.cutoff_hz = cutoff_hz
+        # board.drive = drive
+        # board.resonance = resonance
+        # return board.process(
+        #     input_array=audio_signal,
+        #     sample_rate=self.sample_rate,
+        #     reset=False,
+        # )
+        pass
+
+    def apply_wave_guide(self, audio_signal, wave_guide_mix, decay, body, tone):
+        if wave_guide_mix:
+            zero_tail = np.zeros(audio_signal.shape[0])
+            audio_signal = np.concatenate([audio_signal, zero_tail])
+
+            board = Pedalboard([Delay()])
+            board.delay_seconds = tone
+            board.feedback = decay
+            board.mix = wave_guide_mix
+            # body is low pass filter
+            return board.process(
+                input_array=audio_signal,
+                sample_rate=self.sample_rate,
+                reset=False,
+            )
+            # return audio_signal
+        else:
+            return audio_signal
+
+    def apply_wave_guide2(self, audio_signal, wave_guide_mix, decay, body, tone):
+        steps = int(tone * self.sample_rate // 1)
+        segments = int(1 // tone)
+        leftover = 1 % tone
+        arr_len = audio_signal.shape[0]
+        # print(arr_len)
+
+        if wave_guide_mix:
+            zero_tail_seg_list = [np.zeros(arr_len) for x in range(segments)]
+            zero_tail_leftover = [np.zeros(int(arr_len * leftover) // 1)]
+            audio_signal = np.concatenate(
+                [audio_signal] + zero_tail_seg_list + zero_tail_leftover
+            )
+            for step in np.arange(0, arr_len, steps):
+                # print(audio_signal.shape)
+                rolled_signal = (np.roll(audio_signal, shift=steps)) * decay
+                audio_signal += rolled_signal
+            return audio_signal
 
 
 @dataclass
@@ -967,12 +1033,18 @@ class VD_GenericLayer(SynthLayer):
     frequency: int = 440
     mod_amount: float = 1.0  # BETWEEN 0-1
     mod_rate: int = 220
-    wave_guide_send: float = 0  # BETWEEN 0-1
+    wave_guide_mix: float = 0.0  # BETWEEN 0-1
+    wave_decay: float = 0.95  # BETWEEN 0-1
+    wave_tone: float = 0.001  # BETWEEN 0-1
+    wave_body: float = 0.0  # BETWEEN 0-1
 
     def __post_init__(self):
         super().__post_init__()
-        self.wave_guide_send = self.wrap_around(self.wave_guide_send)
         self.mod_amount = self.wrap_around(self.mod_amount)
+        self.wave_guide_mix = self.wrap_around(self.wave_guide_mix)
+        self.wave_decay = self.wrap_around(self.wave_decay)
+        self.wave_tone = self.wrap_around(self.wave_tone)
+        self.wave_body = self.wrap_around(self.wave_body)
         # self.duration = self.attack + self.decay
         # self.num_samples = int(self.duration * self.sample_rate)
         self.osc_func = {
@@ -1002,6 +1074,7 @@ class VD_GenericLayer(SynthLayer):
         self.gen_carrier_signal()
         self.gen_envelope()
         self.gen_layer()
+        self.wave_guide_send()
 
     def gen_mod_signal(self):
         """
@@ -1058,6 +1131,20 @@ class VD_GenericLayer(SynthLayer):
         return self.gen_filtered_noise(
             cutoff_hz=self.frequency, noise_type="white", filter_type="B2"
         )
+
+    def wave_guide_send(self):
+        if self.wave_guide_mix:
+            # print(self.layer_audio.shape)
+            self.layer_audio = self.apply_wave_guide2(
+                audio_signal=self.layer_audio,
+                wave_guide_mix=self.wave_guide_mix,
+                decay=self.wave_decay,
+                body=self.wave_body,
+                tone=self.wave_tone,
+            )
+            # print(self.layer_audio.shape)
+        else:
+            pass
 
     # def gen_highpass_blue_noise(self):
     #     return self.gen_filtered_noise(
