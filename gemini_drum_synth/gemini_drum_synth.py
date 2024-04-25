@@ -118,10 +118,10 @@ class SynthLayer(Layer):
     decay: float = 2.0  # Duration of the decay synthesized sound (seconds)
 
     def __post_init__(self):
-
+        self.level_wrap_around()
         self.attack = self.attack if self.attack else 0.00001
         self.duration = self.attack + self.decay
-        self.attack_samples = int(np.ceil(self.attack * self.sample_rate))
+        self.attack_samples = int(np.floor(self.attack * self.sample_rate))
         self.decay_samples = int(self.decay * self.sample_rate)
         self.num_samples = int(self.attack_samples + self.decay_samples)
         self.env_t = self.get_t(num_samples=self.num_samples)
@@ -132,15 +132,23 @@ class SynthLayer(Layer):
         # self.dec_t = np.linspace(0, 1, self.decay_samples)
         self.frequency = 2 ** ((self.pitch - 69) / 12) * 440
 
-    def get_t(self, num_samples=0):
-        if num_samples:
-            return np.linspace(0, 1, num_samples, endpoint=False)
-        elif self.num_click_samples:
-            return np.linspace(0, 1, self.num_click_samples, endpoint=False)
-        else:
-            return np.linspace(0, 1, self.num_samples, endpoint=False)
-
     ####HELPER_FUNCTIONS####
+    def level_wrap_around(self):
+        self.level %= 1
+
+    def get_t(self, num_samples=441):
+        """
+        Creates t value for envelope generators
+        TODO FIX BUGGY CONDITIONAL LOGIC
+        """
+        return np.linspace(0, 1, num_samples, endpoint=False)
+        # if num_samples:
+        # return np.linspace(0, 1, num_samples, endpoint=False)
+        # elif self.num_click_samples:
+        #     return np.linspace(0, 1, self.num_click_samples, endpoint=False)
+        # else:
+        #     return np.linspace(0, 1, self.num_samples, endpoint=False)
+
     def filter_translate(self, filter_type="L2"):
         filter_translate = {
             'L1': LadderFilter.LPF12,
@@ -152,12 +160,19 @@ class SynthLayer(Layer):
         }
         return filter_translate.get(filter_type.upper())
 
+    def min_max_normalization(self, signal):
+        return (signal - np.min(signal)) / (np.max(signal) - np.min(signal))
+
+    def one_neg_one_normalization(self, signal):
+        return 2 * self.min_max_normalization(signal) - 1
+
     ####WAVE_OSCILLATORS####
 
     def gen_sine_wave(self, pitch_override=0):
         """
         Generate Sine Wave
         """
+
         if not pitch_override:
             pitch_override = self.frequency
         t = np.linspace(0, self.duration, self.num_samples, endpoint=False)
@@ -273,6 +288,15 @@ class SynthLayer(Layer):
 
             # Combine envelope with low-frequency component
             self.layer_audio = self.gen_click_env() * low_freq_component
+
+        elif click_type == 'T2':
+            # Envelope shaping for thud click
+            low_freq_component = np.sin(
+                2 * np.pi * 200 * self.get_t(num_samples=0.05)
+            )  # Low-frequency sinusoidal component
+
+            # Combine envelope with low-frequency component
+            self.layer_audio = self.gen_click_env(num_samples=0.05) * low_freq_component
 
         else:
             raise ValueError(
@@ -404,14 +428,24 @@ class SynthLayer(Layer):
         """Generate a logarithmic decay."""
         base = 0.95**degree
         log_decay = np.flip(np.logspace(1, 0, self.decay_samples, base=base))
-        return (log_decay - np.min(log_decay)) / (np.max(log_decay) - np.min(log_decay))
+        # return (log_decay - np.min(log_decay)) / (np.max(log_decay) - np.min(log_decay))
+        return (
+            self.min_max_normalization(log_decay)
+            if self.decay_samples
+            else np.zeros(self.decay_samples)
+        )
 
     def gen_log_attack(self, degree=50):
         """Generate a logarithmic attack."""
         base = 0.95**degree
-        log_attack = np.flip(np.logspace(1, 0, self.attack_samples, base=base))
-        return (log_attack - np.min(log_attack)) / (
-            np.max(log_attack) - np.min(log_attack)
+        log_attack = np.flip(np.logspace(0, 1, self.attack_samples, base=base))
+        # # return (log_attack - np.min(log_attack)) / (
+        # #     np.max(log_attack) - np.min(log_attack)
+        # )
+        return (
+            self.min_max_normalization(log_attack)
+            if self.attack_samples
+            else np.zeros(self.attack_samples)
         )
 
     def gen_lin_attack(self):
@@ -424,10 +458,13 @@ class SynthLayer(Layer):
 
     ####ENVELOPE_GENERATORS####
 
-    def gen_click_env(self):
-        return np.exp(-5 * self.get_t())
+    def gen_click_env(self, num_samples=441):
+        return np.exp(-5 * self.get_t(num_samples=num_samples))
 
-    def gen_lin_log_ad_env(self, degree=50):
+    def gen_lin_att_lin_dec_env(self):
+        return self.gen_lin_env()
+
+    def gen_lin_att_log_dec_env(self, degree=50):
         """Generate a linear attack / logrithmic decay envelope."""
         rise = self.gen_lin_attack()
         fall = self.gen_log_decay(degree=degree)
@@ -435,14 +472,14 @@ class SynthLayer(Layer):
         self.num_samples = rise.shape[0] + fall.shape[0]
         return envelope[: self.num_samples]
 
-    def gen_log_log_ad_env(self, degree=50):
+    def gen_log_att_log_dec_env(self, degree=50):
         rise = self.gen_log_attack(degree=degree)
         fall = self.gen_log_decay(degree=degree)
         envelope = np.concatenate([rise, fall])
         self.num_samples = rise.shape[0] + fall.shape[0]
         return envelope[: self.num_samples]
 
-    def gen_lin_env(self, degree=50):
+    def gen_lin_env(self):
         """Generate a linear attack / logrithmic decay envelope."""
         rise = self.gen_lin_attack()
         fall = self.gen_lin_decay()
@@ -454,7 +491,7 @@ class SynthLayer(Layer):
         """Generate a double peak envelope."""
         # t = np.linspace(0, 1, self.num_samples)
         shift_amt = int(self.num_samples * seperation)
-        envelope = self.gen_lin_log_ad_env(degree=degree)
+        envelope = self.gen_lin_att_log_dec_env(degree=degree)
         zeros = np.zeros(shift_amt)
         ones = np.ones(int(self.num_samples - shift_amt))
         mask = np.concatenate((ones, zeros))
@@ -581,10 +618,19 @@ class SynthLayer(Layer):
 
     ####MODULATION_FUNCTIONS####
 
-    def modulate_amplitude(self):
-        """Generate an amplitude-modulated signal (AM) using a modulation envelope."""
-        t = np.linspace(
-            0, self.duration, int(self.sample_rate * self.duration), endpoint=False
+    def modulate_frequency(self, carrier_signal, modulation_signal):
+        """
+        Creates an FM signal from carrier and modulation signals.
+
+        Parameters:
+        carrier_signal: (numpy array) signal to be modulated.
+        modulation_signal: (numpy array) signal to use as basis for modulation.
+
+        Returns:
+        numpy array as an audio signal
+        """
+        return self.one_neg_one_normalization(
+            np.sin(carrier_signal + modulation_signal)
         )
 
 
@@ -723,7 +769,23 @@ class ND_NoiseLayer(SynthLayer):
 
 @dataclass
 class ND_ToneLayer(SynthLayer):
-    """INCOMPLETE NEED MANY TYPES OF SOUND GENERATION STILL"""
+    """
+    INCOMPLETE NEED MANY TYPES OF SOUND GENERATION STILL
+    Parameters:
+    FROM GENERIC_VD
+    - sample_rate: sample rate in number of individual samples
+    - src_type: type of audio signal to be generated as a basis for the drum layer sound
+    - mod_type: type of modulation being applied to signal if not specified in src_type
+    - env_type: type of envelope to apply to signal: linear, exponential 1, exponential 2, exponential 3, punchy, double peak
+    - level: audio level 0-1 of output signal
+    - attack: time in seconds for signal to rise to peak
+    - decay: time in seconds for signal to drop to persistent zero after peak
+    - frequency: Fundamental frequency of the oscillator or in the case of noise the cutoff filter applied to noise (Hz)
+    - mod_amount: amount or amplitude of modulation to effect oscillation signal
+    - mod_rate: frequency of modulated signal
+    # - detune: offers a detuning function that adds an oscillator of a fix difference frequency specified by this value
+
+    """
 
     wave: str = "A1"  # default sine wave
     second: int = 50  # second parameter, spectra if applicable
@@ -827,67 +889,53 @@ class ND_ToneLayer(SynthLayer):
         )
         return laplacian_u
 
-    def frequency_modulation(self, carrier_freq, modulation_type, mod_freq, mod_amount):
-        """Generate a frequency-modulated signal (FM)."""
-        t = np.linspace(
-            0, self.duration, int(self.sample_rate * self.duration), endpoint=False
-        )
+    # def frequency_modulation(self, carrier_signal, modulation_signal, mod_freq, mod_amount):
+    #     """Generate a frequency-modulated signal (FM)."""
+    #     t = np.linspace(
+    #         0, self.duration, int(self.sample_rate * self.duration), endpoint=False
+    #     )
 
-        # Modulation waveform generation based on modulation type
-        if modulation_type == 'log_decay':
-            modulation_waveform = self.gen_log_decay(
-                len(t), attack_time=0.1, decay_time=0.5
-            )
-        elif modulation_type == 'sine':
-            modulation_waveform = self.gen_sine_wave()
-        elif modulation_type == 'noise':
-            modulation_waveform = self.gen_white_noise()
-        else:
-            raise ValueError(
-                "Invalid modulation type. Choose from 'log_decay', 'sine', or 'noise'."
-            )
+    #     # Modulation waveform generation based on modulation type
 
-        # Carrier signal (sine wave)
-        # carrier_signal = np.sin(2 * np.pi * carrier_freq * t)
+    #     # Carrier signal (sine wave)
+    #     # carrier_signal = np.sin(2 * np.pi * carrier_freq * t)
 
-        # Frequency modulation (FM) by scaling the carrier frequency with the modulation waveform
-        fm_signal = np.sin(
-            2 * np.pi * (carrier_freq + mod_amount * modulation_waveform) * t
-        )
+    #     # Frequency modulation (FM) by scaling the carrier frequency with the modulation waveform
+    #     fm_signal = np.sin(
+    #         2 * np.pi * (carrier_freq + mod_amount * modulation_signal) * t
+    #     )
 
-        return fm_signal
+    #     return fm_signal
 
 
 @dataclass
 class VD_GenericLayer(SynthLayer):
     """
-    Generate a drum sound using basic synthesis.
+    Generates a layer of drum sounds using basic synthesis with a drum-oriented interface based on volca drum.
 
     Parameters:
     - sample_rate: sample rate in number of individual samples
-    - output_file_bitdepth: bit depth of file to be generated
     - src_type: type of audio signal to be generated as a basis for the drum layer sound
     - mod_type: type of modulation being applied to signal if not specified in src_type
-    - env_type: type of envelope to apply to signal: linear, exponential 1, exponential 2, exponential 3, punchy, double peak
+    - env_type: type of envelope to apply to signal: lin, log, double peak
     - level: audio level 0-1 of output signal
-    - frequency: Fundamental frequency of the oscillator or in the case of noise the cutoff filter applied to noise (Hz)
-    - detune: offers a detuning function that adds an oscillator of a fix difference frequency specified by this value
     - attack: time in seconds for signal to rise to peak
     - decay: time in seconds for signal to drop to persistent zero after peak
+    - frequency: Fundamental frequency of the oscillator or in the case of noise the cutoff filter applied to noise (Hz)
     - mod_amount: amount or amplitude of modulation to effect oscillation signal
     - mod_rate: frequency of modulated signal
-
+    # - detune: offers a detuning function that adds an oscillator of a fix difference frequency specified by this value
     """
 
-    src_type: str = "square"
+    src_type: str = "sine"
     mod_type: str = "exp"
-    env_type: str = "linear"
+    env_type: str = "lin"
     noise_type: str = "white"
     frequency: int = 440
-    detune: int = 10
     mod_amount: float = 1.0
     mod_rate: int = 220
-    dynamic_filter: float = 0
+    # detune: int = 10
+    # dynamic_filter: float = 0
 
     def __post_init__(self):
         super().__post_init__()
@@ -899,150 +947,138 @@ class VD_GenericLayer(SynthLayer):
             "pink": self.gen_pink_noise,
             "blue": self.gen_blue_noise,
         }
-        self.filter_types = {
-            "low": self.apply_low_pass_filter,
-            "high": self.apply_high_pass_filter,
-            "band": self.apply_band_pass_filter,
-        }
         self.osc_func = {
             "sine": self.gen_sine_wave,
             "saw": self.gen_saw_wave,
-            "rev_saw": self.gen_rev_saw_wave,
-            "square": self.gen_square_wave,
-            "tri": self.gen_tri_wave,
-            "white_noise": self.gen_white_noise,
+            # "rev_saw": self.gen_rev_saw_wave,
+            # "square": self.gen_square_wave,
+            # "tri": self.gen_tri_wave,
+            # "white_noise": self.gen_white_noise,
             "hp_white_noise": self.gen_highpass_white_noise,
             "lp_white_noise": self.gen_lowpass_white_noise,
             "bp_white_noise": self.gen_bandpass_white_noise,
-            "blue_noise": self.gen_blue_noise,
-            "hp_blue_noise": self.gen_highpass_blue_noise,
-            "lp_blue_noise": self.gen_lowpass_blue_noise,
-            "bp_blue_noise": self.gen_bandpass_blue_noise,
-            "brown_noise": self.gen_brown_noise,
-            "hp_brown_noise": self.gen_highpass_brown_noise,
-            "lp_brown_noise": self.gen_lowpass_brown_noise,
-            "bp_brown_noise": self.gen_bandpass_brown_noise,
-            "pink_noise": self.gen_pink_noise,
-            "hp_pink_noise": self.gen_highpass_pink_noise,
-            "lp_pink_noise": self.gen_lowpass_pink_noise,
-            "bp_pink_noise": self.gen_bandpass_pink_noise,
+            # "blue_noise": self.gen_blue_noise,
+            # "hp_blue_noise": self.gen_highpass_blue_noise,
+            # "lp_blue_noise": self.gen_lowpass_blue_noise,
+            # "bp_blue_noise": self.gen_bandpass_blue_noise,
+            # "brown_noise": self.gen_brown_noise,
+            # "hp_brown_noise": self.gen_highpass_brown_noise,
+            # "lp_brown_noise": self.gen_lowpass_brown_noise,
+            # "bp_brown_noise": self.gen_bandpass_brown_noise,
+            # "pink_noise": self.gen_pink_noise,
+            # "hp_pink_noise": self.gen_highpass_pink_noise,
+            # "lp_pink_noise": self.gen_lowpass_pink_noise,
+            # "bp_pink_noise": self.gen_bandpass_pink_noise,
         }
-        self.env_type = {
-            "log": self.gen_log_decay,
-            "linear": self.gen_linear_decay,
-            "double_peak": self.gen_double_peak,
+        self.gen_mod_signal()
+        self.gen_carrier_signal()
+        self.gen_envelope()
+        self.gen_layer()
+
+    def gen_mod_signal(self):
+        """
+        Create mod signal
+        """
+        mod_translate = {
+            'exp': self.gen_log_decay,
+            'sine': self.gen_sine_wave,
+            'noise': self.gen_white_noise,
         }
-        self.apply_wave()
-        # if self.b is None:
-        #     self.b = 'Bravo'
-        # if self.c is None:
-        #     self.c = 'Charlie'
+        self.modulation_signal = mod_translate.get(self.mod_type)()
 
-    def apply_wave(self):
-        """Run code to generate source audio that will be used as basis for drum sounds"""
-        self.layer_audio = self.osc_func[self.src_type]()
+    def gen_carrier_signal(self):
+        """Generate carrier signal that will be used as basis for drum sounds"""
+        self.carrier_signal = self.osc_func[self.src_type]()
 
-    def gen_filtered_noise(self, noise_type, filter_type, cutoff):
-        noise = self.noise_types.get(noise_type, "white")()
-        return self.allpass_filter(signal=noise)
-        # return self.filter_types.get(filter_type)(
-        #     signal=self.noise_types.get(noise_type)(), cutoff_frequency=cutoff
-        # )
+    def gen_envelope(self):
+        envelopes = {
+            'lin': self.gen_lin_att_lin_dec_env,
+            'log': self.gen_log_att_log_dec_env,
+            'dp': self.gen_double_peak_env,
+        }
+        self.envelope = envelopes.get(self.env_type)()
+
+    def gen_layer(self):
+        self.layer_audio = (
+            self.modulate_frequency(self.carrier_signal, self.modulation_signal)
+            * self.envelope
+        )
+
+    def gen_filtered_noise(self, cutoff_hz, noise_type='white', filter_type='L2'):
+        noise_signal = self.noise_types.get(noise_type)
+        return self.apply_filter(
+            audio_signal=noise_signal, cutoff_hz=cutoff_hz, filter_type=filter_type
+        )
 
     def gen_highpass_white_noise(self):
         return self.gen_filtered_noise(
-            noise_type="white", filter_type="high", cutoff=self.frequency
-        )
-
-    def gen_highpass_blue_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="blue", filter_type="high", cutoff=self.frequency
-        )
-
-    def gen_highpass_pink_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="pink", filter_type="high", cutoff=self.frequency
-        )
-
-    def gen_highpass_brown_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="brown", filter_type="high", cutoff=self.frequency
+            cutoff_hz=self.frequency, noise_type="white", filter_type="L2"
         )
 
     def gen_lowpass_white_noise(self):
         return self.gen_filtered_noise(
-            noise_type="white", filter_type="low", cutoff=self.frequency
-        )
-
-    def gen_lowpass_blue_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="blue", filter_type="low", cutoff=self.frequency
-        )
-
-    def gen_lowpass_pink_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="pink", filter_type="low", cutoff=self.frequency
-        )
-
-    def gen_lowpass_brown_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="brown", filter_type="low", cutoff=self.frequency
+            cutoff_hz=self.frequency, noise_type="white", filter_type="H2"
         )
 
     def gen_bandpass_white_noise(self):
         return self.gen_filtered_noise(
-            noise_type="white", filter_type="band", cutoff=self.frequency
+            cutoff_hz=self.frequency, noise_type="white", filter_type="B2"
         )
 
-    def gen_bandpass_blue_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="blue", filter_type="band", cutoff=self.frequency
-        )
+    # def gen_highpass_blue_noise(self):
+    #     return self.gen_filtered_noise(
+    #         noise_type="blue", filter_type="high", cutoff=self.frequency
+    #     )
 
-    def gen_bandpass_pink_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="pink", filter_type="band", cutoff=self.frequency
-        )
+    # def gen_highpass_pink_noise(self):
+    #     return self.gen_filtered_noise(
+    #         noise_type="pink", filter_type="high", cutoff=self.frequency
+    #     )
 
-    def gen_bandpass_brown_noise(self):
-        return self.gen_filtered_noise(
-            noise_type="brown", filter_type="band", cutoff=self.frequency
-        )
+    # def gen_highpass_brown_noise(self):
+    #     return self.gen_filtered_noise(
+    #         noise_type="brown", filter_type="high", cutoff=self.frequency
+    #     )
 
-    def apply_low_pass_filter(self, signal, cutoff_frequency):
-        """Apply a low-pass Butterworth filter to the signal."""
-        nyquist_freq = 0.5 * self.sample_rate
-        normal_cutoff = cutoff_frequency / nyquist_freq
-        # b, a = butter(4, normal_cutoff, btype='low', analog=False)
-        b, a = butter(4, normal_cutoff, btype="low", analog=True)
-        filtered_signal = lfilter(b, a, signal)
-        filtered_signal /= np.max(np.abs(filtered_signal))
-        return filtered_signal
+    # def gen_lowpass_white_noise(self):
+    #     return self.gen_filtered_noise(
+    #         noise_type="white", filter_type="low", cutoff=self.frequency
+    #     )
 
-    def allpass_filter(self, signal, cutoff=440, filter_type="low"):
-        cut_off_freq_mod = np.geomspace(20000, 20, signal.shape[0])
+    # def gen_lowpass_blue_noise(self):
+    #     return self.gen_filtered_noise(
+    #         noise_type="blue", filter_type="low", cutoff=self.frequency
+    #     )
 
-        allpass_signal = np.zeros_like(signal)
+    # def gen_lowpass_pink_noise(self):
+    #     return self.gen_filtered_noise(
+    #         noise_type="pink", filter_type="low", cutoff=self.frequency
+    #     )
 
-        dn_1 = 0
+    # def gen_lowpass_brown_noise(self):
+    #     return self.gen_filtered_noise(
+    #         noise_type="brown", filter_type="low", cutoff=self.frequency
+    #     )
 
-        for n in range(signal.shape[0]):
-            break_frequency = cut_off_freq_mod[n]
+    # def gen_bandpass_white_noise(self):
+    #     return self.gen_filtered_noise(
+    #         noise_type="white", filter_type="band", cutoff=self.frequency
+    #     )
 
-            tan = np.tan(np.pi * break_frequency / self.sample_rate)
+    # def gen_bandpass_blue_noise(self):
+    #     return self.gen_filtered_noise(
+    #         noise_type="blue", filter_type="band", cutoff=self.frequency
+    #     )
 
-            a1 = (tan - 1) / (tan + 1)
+    # def gen_bandpass_pink_noise(self):
+    #     return self.gen_filtered_noise(
+    #         noise_type="pink", filter_type="band", cutoff=self.frequency
+    #     )
 
-            allpass_signal[n] = a1 + signal[n] + dn_1
-
-            dn_1 = signal[n] - a1 * allpass_signal[n]
-
-        if filter_type == "high":
-            allpass_signal *= -1
-
-        filtered_signal = (signal + allpass_signal) * 0.5
-
-        return filtered_signal
+    # def gen_bandpass_brown_noise(self):
+    #     return self.gen_filtered_noise(
+    #         noise_type="brown", filter_type="band", cutoff=self.frequency
+    #     )
 
 
 # @dataclass
