@@ -92,7 +92,7 @@ class SynthLayer:
     def apply_level(self):
         self.layer_audio *= self.layer_level
 
-    def save_layer(self, filename):
+    def save_layer(self, filename=''):
         """
         Save the audio signal to a WAV file.
 
@@ -100,12 +100,37 @@ class SynthLayer:
         - audio: numpy array containing the audio signal
         - filename: name of the output WAV file
         """
+        if not filename:
+            filename = self.create_layer_description()
 
         # Scale audio to 16-bit integer range (-32768 to 32767)
         audio_int = (self.layer_audio * 32767).astype(np.int16)
 
         # Save the audio to a WAV file
         wavfile.write(self.filepath / f"{filename}.wav", self.sample_rate, audio_int)
+
+    def create_layer_description(self):
+        return '_'.join(
+            [
+                f'{"".join([l[0] for l in x.split("_")])}-{y}'
+                for x, y in self.__dict__.items()
+                if x
+                not in [
+                    'layer_audio',
+                    'filepath',
+                    'att_t',
+                    'dec_t',
+                    'env_t',
+                    'src_func',
+                    'modulation_signal',
+                    'carrier_signal',
+                    'envelope',
+                ]
+            ]
+        )
+
+    def print_it_all(self):
+        print(self.create_layer_description())
 
     ####HELPER_FUNCTIONS####
 
@@ -1096,6 +1121,7 @@ class VD_GenericLayer(SynthLayer):
         self.gen_envelope()
         self.gen_layer()
         self.wave_guide_send()
+        self.print_it_all()
 
     def gen_mod_signal(self):
         """
