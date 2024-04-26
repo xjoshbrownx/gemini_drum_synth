@@ -73,7 +73,7 @@ class SynthLayer:
 
     # LAYER SETTINGS
     layer_level: float = 0.5
-    pitch: int = 60  # adjust pitch of sound in semitones 60 = 256hz, 69 = 440hz
+    pitch: int = 0  # adjust pitch of sound in semitones 60 = 256hz, 69 = 440hz
     attack: float = 0.000001  # Duration of the attack of synthesized sound (seconds) to avoid divide by zero errors
     decay: float = 2.0  # Duration of the decay synthesized sound (seconds)
 
@@ -87,7 +87,6 @@ class SynthLayer:
         self.att_t = self.gen_t(num_samples=self.attack_samples)
         self.dec_t = self.gen_t(num_samples=self.decay_samples)
         self.env_t = self.gen_t(num_samples=self.num_samples)
-        self.frequency = 2 ** ((self.pitch - 69) / 12) * 440
 
     ####OUTPUT_METHODS####
     def apply_level(self):
@@ -125,6 +124,10 @@ class SynthLayer:
         Creates time domain array for envelope generators
         """
         return np.linspace(0, 1, num_samples, endpoint=True)
+
+    def pitch_adjust(self):
+        if self.pitch:
+            self.frequency = 2 ** ((self.pitch - 68) / 12) * 440
 
     def filter_translate(self, filter_type="L2"):
         """
@@ -167,18 +170,18 @@ class SynthLayer:
 
     ####NORMALIZATION_METHODS####
 
-    def normalize_audio(self, audio):
+    def one_neg_one_normalization(self, signal):
         """
         Normalize audio signal to between -1 and 1.
         *low divide by zero risk
         """
-        audio /= np.max(np.abs(audio))
-        return audio
+        signal /= np.max(np.abs(signal))
+        return signal
 
     def min_max_normalization(self, signal):
         return (signal - np.min(signal)) / (np.max(signal) - np.min(signal))
 
-    def one_neg_one_normalization(self, signal):
+    def normalize_audio(self, signal):
         return 2 * self.min_max_normalization(signal) - 1
 
     ####WAVE_OSCILLATORS####
@@ -496,7 +499,7 @@ class SynthLayer:
 
     def gen_lin_att_log_dec_env(self, degree=50):
         """Generate a linear attack / logrithmic decay envelope."""
-        rise = self.gen_lin_attack(degree=degree)
+        rise = self.gen_lin_attack()
         fall = self.gen_log_decay(degree=degree)
         envelope = np.concatenate([rise, fall])
         self.num_samples = rise.shape[0] + fall.shape[0]
@@ -528,8 +531,9 @@ class SynthLayer:
         reenvlope = np.roll(np.min((envelope, mask), axis=0), shift_amt)
         tail = envelope[self.num_samples - shift_amt :]
         remix = np.concatenate((np.max((envelope, reenvlope), axis=0), tail))
-        self.num_samples = self.num_samples + shift_amt
-        return remix
+        resampled_signal = sci_resample(remix, self.num_samples)
+        # self.num_samples = self.num_samples + shift_amt
+        return resampled_signal
 
     def gen_gate_env(self):
         # TODO
@@ -730,6 +734,23 @@ class SynthLayer:
                 rolled_signal = (np.roll(audio_signal, shift=steps)) * decay
                 audio_signal += rolled_signal
             return audio_signal
+
+    def apply_wave_guide3(self, audio_signal, wave_guide_mix, decay, body, tone):
+        """
+        Generate a noise sound waveform of the specified type.
+
+        Parameters:
+
+        Returns:
+            ndarray: NumPy array containing the generated click sound waveform.
+        """
+        board = Pedalboard([Delay(), LadderFilter()])
+        board[0].delay_seconds = tone
+        board[0].feedback = decay
+        board[0].mix = wave_guide_mix
+        board[1].cutoff_hz = body * 3000.0
+        output_signal = board(audio_signal, sample_rate=self.sample_rate)
+        return output_signal
 
 
 @dataclass
@@ -1026,10 +1047,10 @@ class VD_GenericLayer(SynthLayer):
     # - detune: offers a detuning function that adds an oscillator of a fix difference frequency specified by this value
     """
 
-    src_type: str = "sine"
-    mod_type: str = "exp"
-    env_type: str = "lin"
-    noise_type: str = "white"
+    src_type: str = "sine"  # options: 'sine', 'saw', 'hp_noise', 'lp_noise', 'bp_noise'
+    mod_type: str = "exp"  # options: 'exp', 'sine', 'noise'
+    env_type: str = "lin"  # options: 'lin', 'log', 'dp'
+    noise_type: str = "white"  # options: 'white', 'brown', 'pink', 'blue'
     frequency: int = 440
     mod_amount: float = 1.0  # BETWEEN 0-1
     mod_rate: int = 220
@@ -1047,16 +1068,16 @@ class VD_GenericLayer(SynthLayer):
         self.wave_body = self.wrap_around(self.wave_body)
         # self.duration = self.attack + self.decay
         # self.num_samples = int(self.duration * self.sample_rate)
-        self.osc_func = {
+        self.src_func = {
             "sine": self.gen_sine_wave,
             "saw": self.gen_saw_wave,
             # "rev_saw": self.gen_rev_saw_wave,
             # "square": self.gen_square_wave,
             # "tri": self.gen_tri_wave,
             # "white_noise": self.gen_white_noise,
-            "hp_white_noise": self.gen_highpass_white_noise,
-            "lp_white_noise": self.gen_lowpass_white_noise,
-            "bp_white_noise": self.gen_bandpass_white_noise,
+            "hp_noise": self.gen_highpass_noise,
+            "lp_noise": self.gen_lowpass_noise,
+            "bp_noise": self.gen_bandpass_noise,
             # "blue_noise": self.gen_blue_noise,
             # "hp_blue_noise": self.gen_highpass_blue_noise,
             # "lp_blue_noise": self.gen_lowpass_blue_noise,
@@ -1089,7 +1110,7 @@ class VD_GenericLayer(SynthLayer):
 
     def gen_carrier_signal(self):
         """Generate carrier signal that will be used as basis for drum sounds"""
-        self.carrier_signal = self.osc_func.get(self.src_type)()
+        self.carrier_signal = self.src_func.get(self.src_type)()
 
     def gen_envelope(self):
         envelopes = {
@@ -1100,12 +1121,24 @@ class VD_GenericLayer(SynthLayer):
         self.envelope = envelopes.get(self.env_type)()
 
     def gen_layer(self):
-        self.layer_audio = (
-            self.modulate_frequency(self.carrier_signal, self.modulation_signal)
-            * self.envelope
-        )
+        if self.mod_amount:
+            self.layer_audio = (
+                self.envelope
+                * (
+                    (
+                        self.modulate_frequency(
+                            self.carrier_signal, self.modulation_signal
+                        )
+                        * self.mod_amount
+                    )
+                    + ((1 - self.mod_amount) * self.carrier_signal)
+                )
+                / 2
+            )
+        else:
+            self.layer_audio = self.carrier_signal * self.envelope
 
-    def gen_filtered_noise(self, cutoff_hz, noise_type='white', filter_type='L2'):
+    def gen_filtered_noise(self, cutoff_hz, noise_type, filter_type='L1'):
         self.noise_types = {
             "white": self.gen_white_noise,
             "brown": self.gen_brown_noise,
@@ -1117,25 +1150,25 @@ class VD_GenericLayer(SynthLayer):
             audio_signal=noise_signal, cutoff_hz=cutoff_hz, filter_type=filter_type
         )
 
-    def gen_highpass_white_noise(self):
+    def gen_highpass_noise(self):
         return self.gen_filtered_noise(
-            cutoff_hz=self.frequency, noise_type="white", filter_type="L2"
+            cutoff_hz=self.frequency, noise_type=self.noise_type, filter_type="L2"
         )
 
-    def gen_lowpass_white_noise(self):
+    def gen_lowpass_noise(self):
         return self.gen_filtered_noise(
-            cutoff_hz=self.frequency, noise_type="white", filter_type="H2"
+            cutoff_hz=self.frequency, noise_type=self.noise_type, filter_type="H2"
         )
 
-    def gen_bandpass_white_noise(self):
+    def gen_bandpass_noise(self):
         return self.gen_filtered_noise(
-            cutoff_hz=self.frequency, noise_type="white", filter_type="B2"
+            cutoff_hz=self.frequency, noise_type=self.noise_type, filter_type="B2"
         )
 
     def wave_guide_send(self):
         if self.wave_guide_mix:
             # print(self.layer_audio.shape)
-            self.layer_audio = self.apply_wave_guide2(
+            self.layer_audio = self.apply_wave_guide3(
                 audio_signal=self.layer_audio,
                 wave_guide_mix=self.wave_guide_mix,
                 decay=self.wave_decay,
