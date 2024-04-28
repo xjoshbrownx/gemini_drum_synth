@@ -1,5 +1,5 @@
 The Gemini Drum Synth package was inspired by the flexibility, realism and versatility of drum synthesizers like the Nord Drum line and the Volca Drum. 
-Using layers and the option of physical modeling to piece together aspects of drum sounds, these synths can create other-worldly sounds that are still based in the realism of percussive sound generation. 
+By using layers to piece together aspects of drum sounds, and providing the option of physical modeling, these synths can create other-worldly sounds that are still based in the realism of percussive sound generation. 
 I sought to both faithfully combine these wonderful devices, while also allowing users to supercede the limits of either device to create drum synthesis engine that offered the best of all techniques, while still offering an approachable interface. 
 The goals of this project are:
     1. to create something for me to enjoy using
