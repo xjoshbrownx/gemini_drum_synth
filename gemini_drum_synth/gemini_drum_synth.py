@@ -51,6 +51,7 @@ class SoundChannel:
     """
 
     # ADMIN SETTINGS
+    channel_audio = np.zeros(1)
     channel_filepath: Path = Path.home() / "drumsynth/samples"
 
     # AUDIO SETTINGS
@@ -72,10 +73,12 @@ class SoundChannel:
 
     def __post_init__(self):
         self.layers: list = []  # list of layers of audio samples
-        self.channel_audio = np.zeros(1)
 
     def add_nd_click_layer(
-        self, layer_level: float, click_type: str, click_duration: float
+        self,
+        layer_level: float = 1.0,
+        click_type: str = 'N2',
+        click_duration: float = 0.01,
     ):
         """
         Adds ND_ClickLayer object to Sound Channel object layer list.
@@ -91,15 +94,15 @@ class SoundChannel:
 
     def add_nd_noise_layer(
         self,
-        layer_level: float,
-        pitch: int,
-        attack: float,
-        decay: float,
-        decay_type: str,
-        filter_type: str,
-        resonance: float,
-        freq: int,
-        dynamic_filter: int,
+        layer_level: float = 1.0,
+        pitch: int = 0,
+        attack: float = 0.025,
+        decay: float = 1.0,
+        decay_type: str = 'E',
+        filter_type: str = 'L2',
+        resonance: float = 0.5,
+        freq: int = 120,
+        dynamic_filter: int = 5,
     ):
         """
         Adds ND_NoiseLayer object to Sound Channel object layer list.
@@ -174,9 +177,9 @@ class SoundChannel:
         # Placeholder for mixing audio samples from all layers
         for layer in self.layers:
             # Generate audio sample for the layer (e.g., using generate_sample method)
-            layer.apply_level()
             layer.gen_layer_sound()
-            self.channel_audio = mix_signals(layer.layer_audio, self.channel_audio)
+            layer.apply_level()
+            self.channel_audio = self.mix_signals(layer.layer_audio, self.channel_audio)
 
             # Mix audio sample into the final track (e.g., add to list)
 
@@ -191,10 +194,14 @@ class SoundChannel:
         - filename: name of the output WAV file
         """
         # Scale audio to 16-bit integer range (-32768 to 32767)
-        audio_int = (self.audio * 32767).astype(np.int16)
+        audio_int = (self.channel_audio * 32767).astype(np.int16)
 
         # Save the audio to a WAV file
-        wavfile.write(self.filepath / f"{filename}.wav", self.sample_rate, audio_int)
+        wavfile.write(
+            self.channel_filepath / f"{filename}.wav",
+            self.channel_sample_rate,
+            audio_int,
+        )
 
 
 @dataclass
@@ -227,6 +234,12 @@ class SynthLayer:
         self.dec_t = self._gen_t(num_samples=self.decay_samples)
         self.env_t = self._gen_t(num_samples=self.num_samples)
 
+    def __str__(self):
+        return self.create_long_layer_desc()
+
+    def __repr__(self):
+        return self.create_long_layer_desc()
+
     ####OUTPUT_METHODS####
     def apply_level(self):
         self.layer_audio *= self.layer_level
@@ -240,7 +253,7 @@ class SynthLayer:
         - filename: name of the output WAV file
         """
         if not filename:
-            filename = self.create_layer_description()
+            filename = self.create_short_layer_desc()
 
         # Scale audio to 16-bit integer range (-32768 to 32767)
         audio_int = (self.layer_audio * 32767).astype(np.int16)
@@ -249,42 +262,22 @@ class SynthLayer:
         wavfile.write(self.filepath / f"{filename}.wav", self.sample_rate, audio_int)
 
     def create_short_layer_desc(self):
+        """Creates a shortened description of the layer object based on the arguments used to initialize the object, removing paths and arrays"""
         return '_'.join(
             [
-                f'{"".join([l[0] for l in x.split("_")])}-{y}'
+                f'{"".join([l[0] if l else "" for l in x.split("_")])}-{y}'
                 for x, y in self.__dict__.items()
-                if x
-                not in [
-                    'layer_audio',
-                    'filepath',
-                    'att_t',
-                    'dec_t',
-                    'env_t',
-                    'src_func',
-                    'modulation_signal',
-                    'carrier_signal',
-                    'envelope',
-                ]
+                if not isinstance(y, (Path, np.ndarray))
             ]
         )
 
     def create_long_layer_desc(self):
+        """Creates an explicit description of the layer object based on the arguments used to initialize the object, removing paths and arrays"""
         return '_'.join(
             [
                 f'{x}: {y}'
                 for x, y in self.__dict__.items()
-                if x
-                not in [
-                    'layer_audio',
-                    'filepath',
-                    'att_t',
-                    'dec_t',
-                    'env_t',
-                    'src_func',
-                    'modulation_signal',
-                    'carrier_signal',
-                    'envelope',
-                ]
+                if not isinstance(y, (Path, np.ndarray))
             ]
         )
 
@@ -312,7 +305,7 @@ class SynthLayer:
         """
         return np.linspace(0, 1, num_samples, endpoint=True)
 
-    def _filter_translate(self, filter_type="L2"):
+    def _translate_filter(self, filter_type="L2"):
         """
         Translates filter type values to uncalled filter methods that can be called with settings locally.
         """
@@ -759,7 +752,7 @@ class SynthLayer:
             no return, applies filter to self.layer_audio.
         """
         board = Pedalboard([LadderFilter()])[0]
-        board.mode = self._filter_translate(filter_type)
+        board.mode = self._translate_filter(filter_type)
         board.cutoff_hz = cutoff_hz
         board.drive = drive
         board.resonance = resonance
@@ -822,7 +815,7 @@ class SynthLayer:
             output = []
 
             for i in range(0, self.num_samples - 1, step_size):
-                board.mode = self._filter_translate(filter_type)
+                board.mode = self._translate_filter(filter_type)
                 board.cutoff_hz = cutoff_hz
                 board.drive = drive
                 board.resonance = resonance
@@ -881,7 +874,7 @@ class SynthLayer:
             no return, applies filter to self.layer_audio.
         """
         # board = Pedalboard([LadderFilter()])[0]
-        # board.mode = self._filter_translate(filter_type)
+        # board.mode = self._translate_filter(filter_type)
         # board.cutoff_hz = cutoff_hz
         # board.drive = drive
         # board.resonance = resonance
@@ -970,12 +963,12 @@ class ND_NoiseLayer(SynthLayer):
     """Drum Sound Layer based on the Noise Layer Synthesis in Nord Drum 3P"""
 
     # noise_type: str = 'white'
-    filter_type: str = 'L2'  # low pass 4 pole
+    filter_type: str = 'L2'  # default low pass 4 pole
     resonance: int = 0  # max 20
     freq: int = 200  # cutoff frequency in Hz
     dynamic_filter: int = 0  # plus or minus 9
     # decay: int = 0  # max 50
-    decay_type: str = "E"  #
+    decay_type: str = "E"  # 'E': 'log','L': 'lin', 'G': 'gate', 'P': 'punch'
     # drive: float = 1.0
 
     def __post_init__(self):
@@ -984,19 +977,22 @@ class ND_NoiseLayer(SynthLayer):
         # print('does this print')
         # print(self.num_samples)
         # self.duration = self.attack + self.decay
-        self._decay_translate = {
-            'E': self.gen_log_decay,
-            'L': self.gen_lin_decay,
-            'G': self.gen_gate_env,
-            'P': self.gen_punch_decay,
-        }
+        self.gen_layer_sound()
 
     def gen_layer_sound(self):
-        self.filter_mode = self._filter_translate(self.filter_type)
-        self.noise_decay_envelope = self._decay_translate.get(self.decay_type, 'E')()
-        self.layer_audio = self.gen_whitdict
+        self.filter_mode = self._translate_filter(self.filter_type)
+        self.noise_decay_envelope = self._translate_decay()()
+        self.layer_audio = self.gen_white_noise()
         self.filter_noise()
         self.apply_noise_envelope()
+
+    def _translate_decay(self):
+        return {
+            'E': self.gen_lin_att_log_dec_env,
+            'L': self.gen_lin_att_lin_dec_env,
+            'G': self.gen_gate_env,
+            'P': self.gen_punch_decay,
+        }.get(self.decay_type)
 
     def filter_noise(self):
         """
@@ -1256,33 +1252,7 @@ class VD_GenericLayer(SynthLayer):
         self.wave_decay = self._wrap_around(self.wave_decay)
         self.wave_tone = self._wrap_around(self.wave_tone)
         self.wave_body = self._wrap_around(self.wave_body)
-        # self.duration = self.attack + self.decay
-        # self.num_samples = int(self.duration * self.sample_rate)
-        self.src_func = {
-            "sine": self.gen_sine_wave,
-            "saw": self.gen_saw_wave,
-            # "rev_saw": self.gen_rev_saw_wave,
-            # "square": self.gen_square_wave,
-            # "tri": self.gen_tri_wave,
-            # "white_noise": self.gen_white_noise,
-            "hp_noise": self.gen_highpass_noise,
-            "lp_noise": self.gen_lowpass_noise,
-            "bp_noise": self.gen_bandpass_noise,
-            # "blue_noise": self.gen_blue_noise,
-            # "hp_blue_noise": self.gen_highpass_blue_noise,
-            # "lp_blue_noise": self.gen_lowpass_blue_noise,
-            # "bp_blue_noise": self.gen_bandpass_blue_noise,
-            # "brown_noise": self.gen_brown_noise,
-            # "hp_brown_noise": self.gen_highpass_brown_noise,
-            # "lp_brown_noise": self.gen_lowpass_brown_noise,
-            # "bp_brown_noise": self.gen_bandpass_brown_noise,
-            # "pink_noise": self.gen_pink_noise,
-            # "hp_pink_noise": self.gen_highpass_pink_noise,
-            # "lp_pink_noise": self.gen_lowpass_pink_noise,
-            # "bp_pink_noise": self.gen_bandpass_pink_noise,
-        }
         self.gen_layer_sound()
-        # self.print_it_all()
 
     def gen_layer_sound(self):
         """Runs (or reruns) procedure to generate audio for layer array."""
@@ -1305,8 +1275,18 @@ class VD_GenericLayer(SynthLayer):
         self.modulation_signal = mod_translate.get(self.mod_type)() * self.mod_amount
 
     def gen_carrier_signal(self):
+        src_func = {
+            "sine": self.gen_sine_wave,
+            "saw": self.gen_saw_wave,
+            # "rev_saw": self.gen_rev_saw_wave,
+            # "square": self.gen_square_wave,
+            # "tri": self.gen_tri_wave,
+            "hp_noise": self.gen_highpass_noise,
+            "lp_noise": self.gen_lowpass_noise,
+            "bp_noise": self.gen_bandpass_noise,
+        }
         """Generate carrier signal that will be used as basis for drum sounds"""
-        self.carrier_signal = self.src_func.get(self.src_type)()
+        self.carrier_signal = src_func.get(self.src_type)()
 
     def gen_envelope(self):
         envelopes = {
@@ -1364,7 +1344,6 @@ class VD_GenericLayer(SynthLayer):
     def wave_guide_send(self):
         """Sends audio through a wave guide delay to mix it back in"""
         if self.wave_guide_mix:
-            # print(self.layer_audio.shape)
             wave_guide = self.gen_wave_guide(
                 audio_signal=self.layer_audio,
                 wave_guide_mix=self.wave_guide_mix,
@@ -1375,4 +1354,3 @@ class VD_GenericLayer(SynthLayer):
             self.layer_audio = (self.layer_audio * (self.wave_guide_send / 2)) + (
                 self.layer_audio * ((1 - self.wave_guide_send) / 2)
             )
-            # print(self.layer_audio.shape)
