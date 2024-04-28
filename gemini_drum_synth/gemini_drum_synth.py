@@ -74,6 +74,33 @@ class SoundChannel:
     def __post_init__(self):
         self.layers: list = []  # list of layers of audio samples
 
+    def num_float_to_int(self, v_float, v_int):
+        return np.floor(v_float * v_int)
+
+    def add_nd_click_layer_rand(self):
+        self.add_nd_click_layer_num(np.random.rand(3))
+
+    def add_nd_click_layer_num(self, values: np.ndarray):
+        """
+        Adds ND_ClickLayer object to Sound Channel object layer list using random floats as arguments compared to explict arguments in "normal" version.
+        """
+        layer = ND_ClickLayer(
+            bit_depth=self.channel_bitdepth,
+            sample_rate=self.channel_sample_rate,
+            layer_level=values[0],
+            click_type={
+                0: 'N1',
+                1: 'N2',
+                2: 'S1',
+                3: 'I1',
+                4: 'M1',
+                5: 'T1',
+                6: 'T2',
+            }.get(np.floor(values[1] * 7)),
+            click_duration=np.abs(np.log(values[2]) / 50) + 0.005,
+        )
+        self.layers.append(layer)
+
     def add_nd_click_layer(
         self,
         layer_level: float = 1.0,
@@ -89,6 +116,35 @@ class SoundChannel:
             layer_level=layer_level,
             click_type=click_type,
             click_duration=click_duration,
+        )
+        self.layers.append(layer)
+
+    def add_nd_noise_layer_rand(self):
+        self.add_nd_noise_layer_num(np.random.rand(9))
+
+    def add_nd_noise_layer_num(self, values: np.ndarray):
+        """
+        Adds ND_NoiseLayer object to Sound Channel object layer list.
+
+        Parameters:
+        values: np.random.rand(9) array
+        """
+        layer = ND_NoiseLayer(
+            bit_depth=self.channel_bitdepth,
+            sample_rate=self.channel_sample_rate,
+            layer_level=values[0],
+            pitch=self.num_float_to_int(values[1], 120) + 1,
+            attack=values[2] ** 3,
+            decay=np.abs(np.log(values[3])),
+            decay_type={0: 'E', 1: 'L', 2: 'G'}.get(
+                self.num_float_to_int(values[4], 3)
+            ),  # 3:'P'
+            filter_type={0: 'L1', 1: 'L2', 2: 'B1', 3: 'B2', 4: 'H1', 5: 'H2'}.get(
+                self.num_float_to_int(values[5], 6)
+            ),
+            resonance=values[6],
+            freq=self.num_float_to_int(values[7], 10000) + 20,
+            dynamic_filter=self.num_float_to_int(values[8], 9),
         )
         self.layers.append(layer)
 
@@ -235,10 +291,10 @@ class SynthLayer:
         self.env_t = self._gen_t(num_samples=self.num_samples)
 
     def __str__(self):
-        return self.create_long_layer_desc()
+        return self._create_long_layer_desc()
 
     def __repr__(self):
-        return self.create_long_layer_desc()
+        return self._create_long_layer_desc()
 
     ####OUTPUT_METHODS####
     def apply_level(self):
@@ -253,7 +309,7 @@ class SynthLayer:
         - filename: name of the output WAV file
         """
         if not filename:
-            filename = self.create_short_layer_desc()
+            filename = self._create_short_layer_desc()
 
         # Scale audio to 16-bit integer range (-32768 to 32767)
         audio_int = (self.layer_audio * 32767).astype(np.int16)
@@ -261,7 +317,7 @@ class SynthLayer:
         # Save the audio to a WAV file
         wavfile.write(self.filepath / f"{filename}.wav", self.sample_rate, audio_int)
 
-    def create_short_layer_desc(self):
+    def _create_short_layer_desc(self):
         """Creates a shortened description of the layer object based on the arguments used to initialize the object, removing paths and arrays"""
         return '_'.join(
             [
@@ -271,7 +327,7 @@ class SynthLayer:
             ]
         )
 
-    def create_long_layer_desc(self):
+    def _create_long_layer_desc(self):
         """Creates an explicit description of the layer object based on the arguments used to initialize the object, removing paths and arrays"""
         return '_'.join(
             [
@@ -283,9 +339,9 @@ class SynthLayer:
 
     def print_it_all(self, long=True):
         if long:
-            print(self.create_long_layer_desc())
+            print(self._create_long_layer_desc())
         else:
-            print(self.create_short_layer_desc())
+            print(self._create_short_layer_desc())
 
     ####HELPER_FUNCTIONS####
 
@@ -464,8 +520,8 @@ class SynthLayer:
         self.num_click_samples = int(self.sample_rate * click_duration)
         click_t = self._gen_t(self.num_click_samples)
         click_env = self.gen_click_env(click_t=click_t)
-        # Exponential decay envelope
-        # print(num_click_samples)
+
+        ### !!! #### WHEN ADDING TO THIS LIST CHANGE sound channel numeric input as well ####
 
         if click_type == 'S1':
             # Generate a simple click (cosine wave envelope)
