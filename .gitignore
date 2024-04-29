@@ -1,3 +1,4 @@
 src/gemini_drum_synth_xjoshbrownx.egg-info/setup.cfg
 gemini_drum_synth/__pycache__/gemini_drum_synth.cpython-310.pyc
 *.pyc
+notebooks/*
