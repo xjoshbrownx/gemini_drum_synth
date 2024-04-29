@@ -282,6 +282,15 @@ class SynthLayer:
         self.attack = (
             self.attack if self.attack else 0.00001
         )  # SET ATTACK TO NON-ZERO VALUE TO AVOID DIVIDE BY ZERO ERRORS
+        self.prep_layer()
+
+    def __str__(self):
+        return self._create_long_layer_desc()
+
+    def __repr__(self):
+        return self._create_long_layer_desc()
+
+    def prep_layer(self):
         self.attack_samples = int(np.floor(self.attack * self.sample_rate))
         self.decay_samples = int(np.floor(self.decay * self.sample_rate))
         # self.duration = self.attack + self.decay
@@ -289,12 +298,6 @@ class SynthLayer:
         self.att_t = self._gen_t(num_samples=self.attack_samples)
         self.dec_t = self._gen_t(num_samples=self.decay_samples)
         self.env_t = self._gen_t(num_samples=self.num_samples)
-
-    def __str__(self):
-        return self._create_long_layer_desc()
-
-    def __repr__(self):
-        return self._create_long_layer_desc()
 
     ####OUTPUT_METHODS####
     def apply_level(self):
@@ -329,7 +332,7 @@ class SynthLayer:
 
     def _create_long_layer_desc(self):
         """Creates an explicit description of the layer object based on the arguments used to initialize the object, removing paths and arrays"""
-        return '_'.join(
+        return ', '.join(
             [
                 f'{x}: {y}'
                 for x, y in self.__dict__.items()
